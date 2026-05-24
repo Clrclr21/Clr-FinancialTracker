@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>💰 Finance OS</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💰</text></svg>">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💰</text></svg>">
+<link rel="alternate icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAA7EAAAOxAGVKw4bAAAA">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
 /* ═══════════════════════════════════════════
@@ -721,9 +722,10 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; 
       </div>
     </div>
     <div class="tab-panel" id="analytics-by-account">
+      <div class="kpi-grid mb-24" id="acc-cards" style="margin-bottom:24px"></div>
       <div class="grid-2">
-        <div class="card"><div class="section-title">Account Usage</div><div class="chart-wrap" style="max-width:260px;margin:auto"><canvas id="chart-acc-donut" height="220"></canvas></div></div>
-        <div class="card"><div class="section-title">Account Details</div><table class="data-table"><thead><tr><th>Account</th><th>Inflow</th><th>Outflow</th><th>Net</th><th>Txns</th></tr></thead><tbody id="acc-detail-tbody"></tbody></table></div>
+        <div class="card"><div class="section-title">Spending Distribution (Period)</div><div class="chart-wrap" style="max-width:260px;margin:auto"><canvas id="chart-acc-donut" height="220"></canvas></div></div>
+        <div class="card"><div class="section-title">Account Balance Details</div><div style="overflow-x:auto"><table class="data-table"><thead><tr><th>Account</th><th>Period In</th><th>Period Out</th><th>Current Balance</th><th>Txns</th><th></th></tr></thead><tbody id="acc-detail-tbody"></tbody></table></div></div>
       </div>
     </div>
     <div class="tab-panel" id="analytics-monthly">
@@ -956,7 +958,7 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; 
       </div>
       <div class="form-grid mb-16">
         <div class="form-group">
-          <label>Account *</label>
+          <label id="txn-account-label">Account *</label>
           <select class="form-control" id="txn-account">
             <option value="">Select account</option>
           </select>
@@ -966,7 +968,17 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; 
           <input class="form-control" type="number" id="txn-amount" placeholder="0" min="0">
         </div>
       </div>
-      <div class="form-group">
+      <!-- Transfer: To Account (shown only when type=Transfer) -->
+      <div class="form-group mb-16" id="txn-to-account-wrap" style="display:none;margin-bottom:16px">
+        <label>To Account *</label>
+        <select class="form-control" id="txn-to-account">
+          <option value="">Select destination account</option>
+        </select>
+        <span style="font-size:11px;color:var(--text-light);margin-top:4px;display:block">
+          🔄 Amount will be deducted from source and added to destination
+        </span>
+      </div>
+      <div class="form-group" id="txn-status-wrap">
         <label>Status</label>
         <select class="form-control" id="txn-status">
           <option>✅ Paid</option>
@@ -1072,6 +1084,147 @@ hr.divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; 
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('subcat-modal')">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- ACCOUNT BALANCE MODAL -->
+<div class="modal-overlay" id="account-balance-modal">
+  <div class="modal" style="width:min(480px,96vw)">
+    <div class="modal-header">
+      <h2>💰 Update Account Balance</h2>
+      <button class="modal-close" onclick="closeModal('account-balance-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="bal-account-id">
+
+      <!-- Current balance display -->
+      <div style="background:var(--off-white);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:20px">
+        <div style="font-size:11px;color:var(--text-light);margin-bottom:4px">Account</div>
+        <div style="font-size:16px;font-weight:700;color:var(--deep-brown)" id="bal-account-name">—</div>
+        <div style="font-size:11px;color:var(--text-light);margin-top:6px">Current Balance</div>
+        <div style="font-size:22px;font-weight:800;color:var(--mocha)" id="bal-current-display">—</div>
+      </div>
+
+      <!-- Adjustment type -->
+      <div class="form-group mb-16" style="margin-bottom:16px">
+        <label>Type of Adjustment</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:6px" id="bal-type-grid">
+          <div class="bal-type-option active" data-type="initial" onclick="selectBalType('initial')" style="
+            border:2px solid var(--rose);background:var(--blush);border-radius:var(--radius-sm);
+            padding:10px 8px;text-align:center;cursor:pointer;transition:all .2s
+          ">
+            <div style="font-size:18px;margin-bottom:4px">🏦</div>
+            <div style="font-size:11px;font-weight:700;color:var(--deep-brown)">Initial Balance</div>
+            <div style="font-size:10px;color:var(--text-light);margin-top:2px">Set opening balance</div>
+          </div>
+          <div class="bal-type-option" data-type="adjustment" onclick="selectBalType('adjustment')" style="
+            border:2px solid var(--border);background:var(--off-white);border-radius:var(--radius-sm);
+            padding:10px 8px;text-align:center;cursor:pointer;transition:all .2s
+          ">
+            <div style="font-size:18px;margin-bottom:4px">✏️</div>
+            <div style="font-size:11px;font-weight:700;color:var(--deep-brown)">Manual Adjustment</div>
+            <div style="font-size:10px;color:var(--text-light);margin-top:2px">Add or subtract amount</div>
+          </div>
+          <div class="bal-type-option" data-type="correction" onclick="selectBalType('correction')" style="
+            border:2px solid var(--border);background:var(--off-white);border-radius:var(--radius-sm);
+            padding:10px 8px;text-align:center;cursor:pointer;transition:all .2s
+          ">
+            <div style="font-size:18px;margin-bottom:4px">🔧</div>
+            <div style="font-size:11px;font-weight:700;color:var(--deep-brown)">Correction</div>
+            <div style="font-size:10px;color:var(--text-light);margin-top:2px">Fix to exact amount</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Amount input — changes based on type -->
+      <div id="bal-input-initial">
+        <div class="form-group">
+          <label>Opening Balance Amount</label>
+          <input class="form-control" type="number" id="bal-amount-initial" placeholder="0" min="0">
+          <span style="font-size:11px;color:var(--text-light);margin-top:4px;display:block">
+            💡 Set the starting balance of this account before any transactions were recorded here.
+          </span>
+        </div>
+      </div>
+
+      <div id="bal-input-adjustment" style="display:none">
+        <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label>Direction</label>
+            <select class="form-control" id="bal-adj-direction" onchange="updateAdjPreview()">
+              <option value="add">➕ Add to balance</option>
+              <option value="subtract">➖ Subtract from balance</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Amount</label>
+            <input class="form-control" type="number" id="bal-amount-adjustment" placeholder="0" min="0" oninput="updateAdjPreview()">
+          </div>
+        </div>
+        <div class="form-group" style="margin-top:12px">
+          <label>Note (optional)</label>
+          <input class="form-control" id="bal-adj-note" placeholder="e.g. Bank correction, interest received...">
+        </div>
+        <div style="background:var(--nude);border-radius:var(--radius-sm);padding:10px 12px;margin-top:12px;font-size:12px;color:var(--text-mid)" id="bal-adj-preview">
+          New balance will be shown here
+        </div>
+      </div>
+
+      <div id="bal-input-correction" style="display:none">
+        <div class="form-group">
+          <label>Set Balance To (Exact Amount)</label>
+          <input class="form-control" type="number" id="bal-amount-correction" placeholder="0" min="0"
+            oninput="updateCorrectionPreview()">
+          <span style="font-size:11px;color:var(--text-light);margin-top:4px;display:block">
+            💡 Use this when your actual bank balance differs from what's recorded here.
+          </span>
+        </div>
+        <div style="background:var(--nude);border-radius:var(--radius-sm);padding:10px 12px;margin-top:12px;font-size:12px;color:var(--text-mid)" id="bal-correction-preview">
+          Enter amount to see preview
+        </div>
+      </div>
+
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('account-balance-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveAccountBalance()">Update Balance</button>
+    </div>
+  </div>
+</div>
+
+<!-- CUSTOM CONFIRM MODAL (replaces browser confirm/alert) -->
+<div class="modal-overlay" id="confirm-modal">
+  <div class="modal" style="width:min(380px,96vw)">
+    <div class="modal-header">
+      <h2 id="confirm-modal-title" style="font-size:15px">Are you sure?</h2>
+      <button class="modal-close" onclick="closeConfirm(false)">✕</button>
+    </div>
+    <div class="modal-body" style="padding:16px 24px">
+      <p id="confirm-modal-msg" style="font-size:14px;color:var(--text-mid);line-height:1.5"></p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeConfirm(false)">Cancel</button>
+      <button class="btn btn-danger" id="confirm-modal-ok" onclick="closeConfirm(true)">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- CUSTOM PROMPT MODAL (replaces browser prompt) -->
+<div class="modal-overlay" id="prompt-modal">
+  <div class="modal" style="width:min(380px,96vw)">
+    <div class="modal-header">
+      <h2 id="prompt-modal-title" style="font-size:15px">Enter value</h2>
+      <button class="modal-close" onclick="closePrompt(null)">✕</button>
+    </div>
+    <div class="modal-body" style="padding:16px 24px">
+      <p id="prompt-modal-msg" style="font-size:13px;color:var(--text-mid);margin-bottom:12px"></p>
+      <input class="form-control" id="prompt-modal-input" placeholder="0"
+        onkeydown="if(event.key==='Enter') closePrompt(document.getElementById('prompt-modal-input').value)">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closePrompt(null)">Cancel</button>
+      <button class="btn btn-primary" onclick="closePrompt(document.getElementById('prompt-modal-input').value)">Confirm</button>
     </div>
   </div>
 </div>
@@ -1385,10 +1538,8 @@ function renderDashboard() {
   const budgetUsed  = totalBudget > 0 ? expense/totalBudget : 0;
   const pendingBills = DB.bills.filter(b=>b.status==='Active').length;
 
-  // All-time balance
-  const allIncome  = sumBy(DB.transactions,'Income');
-  const allExpense = sumBy(DB.transactions,'Expense');
-  const totalBal   = allIncome - allExpense;
+  // All-time balance = sum of all account real balances
+  const totalBal = DB.accounts.reduce((sum, a) => sum + computeRealBalance(a), 0);
 
   document.getElementById('kpi-grid').innerHTML = [
     { label:'Total Balance',     value:fmt(totalBal),            icon:'💰', sub:'All time',                     cls:'nude' },
@@ -1558,9 +1709,10 @@ function editTxn(id) {
 }
 
 function deleteTxn(id) {
-  if (!confirm('Delete this transaction?')) return;
-  DB.transactions = DB.transactions.filter(t=>t.id!==id);
-  save('transactions'); toast('Transaction deleted'); renderCurrentPage();
+  showConfirm('Delete this transaction?', () => {
+    DB.transactions = DB.transactions.filter(t=>t.id!==id);
+    save('transactions'); toast('Transaction deleted'); renderCurrentPage();
+  });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1602,28 +1754,78 @@ function renderCatAnalytics(txns) {
 }
 
 function renderAccAnalytics(txns) {
+  // Compute real balance = initial balance + all-time inflow - all-time outflow
+  const allTxns = DB.transactions;
   const accData = {};
-  DB.accounts.forEach(a => { accData[a.name] = { inflow:0, outflow:0, count:0, color:a.color }; });
-  txns.forEach(t => {
-    if (!accData[t.account]) accData[t.account] = { inflow:0, outflow:0, count:0, color:'#ccc' };
-    if (t.type==='Income')  accData[t.account].inflow  += t.amount;
-    if (t.type==='Expense') accData[t.account].outflow += t.amount;
-    accData[t.account].count++;
+  DB.accounts.forEach(a => {
+    accData[a.name] = {
+      id: a.id, inflow:0, outflow:0, count:0,
+      color: a.color, type: a.type,
+      initialBalance: a.balance || 0
+    };
   });
-  const entries = Object.entries(accData).filter(([,d])=>d.count>0);
+  // Use ALL transactions for real balance, filtered txns for period stats
+  allTxns.forEach(t => {
+    if (!accData[t.account]) accData[t.account] = { inflow:0, outflow:0, count:0, color:'#ccc', type:'', initialBalance:0 };
+    if (t.type==='Income')   accData[t.account].inflow  += t.amount;
+    if (t.type==='Expense')  accData[t.account].outflow += t.amount;
+  });
+  // Period stats separately
+  const periodStats = {};
+  txns.forEach(t => {
+    if (!periodStats[t.account]) periodStats[t.account] = { inflow:0, outflow:0, count:0 };
+    if (t.type==='Income')   periodStats[t.account].inflow  += t.amount;
+    if (t.type==='Expense')  periodStats[t.account].outflow += t.amount;
+    periodStats[t.account].count++;
+  });
 
+  const entries = Object.entries(accData);
+
+  // KPI cards per account — show real current balance
+  const accCardsEl = document.getElementById('acc-cards');
+  if (accCardsEl) {
+    accCardsEl.innerHTML = entries.map(([name, d]) => {
+      const realBal = d.initialBalance + d.inflow - d.outflow;
+      const isPositive = realBal >= 0;
+      return `
+      <div class="kpi-card ${isPositive?'mint':'rose'}" style="cursor:pointer" onclick="navigate('settings');switchTab('settings','accounts')">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="width:10px;height:10px;border-radius:50%;background:${d.color};flex-shrink:0"></span>
+          <span style="font-size:11px;color:var(--text-light);font-weight:600">${d.type||'Account'}</span>
+        </div>
+        <div class="kpi-label">${name}</div>
+        <div class="kpi-value" style="font-size:16px">${fmt(realBal)}</div>
+        <div class="kpi-sub">
+          <span style="color:#5CAD7A">↑ ${fmt(d.inflow)}</span>
+          <span style="margin:0 4px;color:var(--border)">|</span>
+          <span style="color:#C96B6B">↓ ${fmt(d.outflow)}</span>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  // Donut — use period outflow for spending distribution
+  const donutEntries = entries.filter(([n])=>(periodStats[n]?.count||0)>0 || accData[n].count>0);
   makeDoughnut('chart-acc-donut',
-    entries.map(([n])=>n),
-    entries.map(([,d])=>d.outflow||d.inflow),
-    entries.map(([,d])=>d.color||'#ccc'));
+    donutEntries.map(([n])=>n),
+    donutEntries.map(([n,d])=>periodStats[n]?.outflow||d.outflow||0),
+    donutEntries.map(([,d])=>d.color||'#ccc'));
 
-  document.getElementById('acc-detail-tbody').innerHTML = entries.map(([name,d])=>`<tr>
-    <td><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:${d.color}"></span>${name}</span></td>
-    <td class="amount-positive">${fmt(d.inflow)}</td>
-    <td class="amount-negative">${fmt(d.outflow)}</td>
-    <td class="${d.inflow-d.outflow>=0?'amount-positive':'amount-negative'} font-bold">${fmt(d.inflow-d.outflow)}</td>
-    <td>${d.count}</td>
-  </tr>`).join('');
+  // Detail table — show real balance
+  document.getElementById('acc-detail-tbody').innerHTML = entries.map(([name,d])=>{
+    const realBal = d.initialBalance + d.inflow - d.outflow;
+    const ps = periodStats[name] || { inflow:0, outflow:0, count:0 };
+    return `<tr>
+      <td><span style="display:inline-flex;align-items:center;gap:6px">
+        <span style="width:10px;height:10px;border-radius:50%;background:${d.color}"></span>${name}
+      </span></td>
+      <td class="amount-positive">${fmt(ps.inflow)}</td>
+      <td class="amount-negative">${fmt(ps.outflow)}</td>
+      <td class="${realBal>=0?'amount-positive':'amount-negative'} font-bold">${fmt(realBal)}</td>
+      <td>${ps.count}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="editAccountBalance('${d.id||name}')">✏️ Edit</button></td>
+    </tr>`;
+  }).join('');
 }
 
 function renderMonthlyAnalytics() {
@@ -1912,9 +2114,10 @@ function editBill(id) {
   setTimeout(()=>{ document.getElementById('bill-cat').value = b.cat; document.getElementById('bill-account').value = b.account||''; },50);
 }
 function deleteBill(id) {
-  if (!confirm('Delete this bill?')) return;
-  DB.bills = DB.bills.filter(b=>b.id!==id);
-  save('bills'); toast('Bill deleted'); renderBills();
+  showConfirm('Delete this bill?', () => {
+    DB.bills = DB.bills.filter(b=>b.id!==id);
+    save('bills'); toast('Bill deleted'); renderBills();
+  });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1982,18 +2185,20 @@ function editGoal(id) {
 }
 
 function addToGoal(id) {
-  const amt = prompt('How much are you adding to this goal?');
-  if (!amt || isNaN(amt)) return;
   const g = DB.goals.find(x=>x.id===id);
   if (!g) return;
-  g.saved = Math.min(g.saved + +amt, g.target);
-  save('goals'); toast('Goal updated 🎯'); renderGoals();
+  showPrompt('How much are you adding to this goal?', (amt) => {
+    if (!amt || isNaN(amt)) return;
+    g.saved = Math.min(g.saved + +amt, g.target);
+    save('goals'); toast('Goal updated 🎯'); renderGoals();
+  }, { placeholder: '0', type: 'number' });
 }
 
 function deleteGoal(id) {
-  if (!confirm('Delete this goal?')) return;
-  DB.goals = DB.goals.filter(g=>g.id!==id);
-  save('goals'); toast('Goal deleted'); renderGoals();
+  showConfirm('Delete this goal?', () => {
+    DB.goals = DB.goals.filter(g=>g.id!==id);
+    save('goals'); toast('Goal deleted'); renderGoals();
+  });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2086,18 +2291,24 @@ function saveSetting(key, val) {
 function renderAccountsList() {
   const el = document.getElementById('accounts-list');
   if (!el) return;
-  el.innerHTML = DB.accounts.map(a=>`
+  el.innerHTML = DB.accounts.map(a=>{
+    const realBal = computeRealBalance(a);
+    const isPos = realBal >= 0;
+    return `
     <div class="settings-item">
       <div class="color-dot" style="background:${a.color||'#ccc'}"></div>
       <div class="settings-item-main">
         <div class="settings-item-label">${a.name}</div>
-        <div class="settings-item-sub">${a.type} · Balance: ${fmt(a.balance||0)}</div>
+        <div class="settings-item-sub">
+          ${a.type} · <span style="font-weight:700;color:${isPos?'#5CAD7A':'#C96B6B'}">Balance: ${fmt(realBal)}</span>
+        </div>
       </div>
       <div class="settings-item-actions">
-        <button class="btn btn-ghost btn-sm" onclick="editAccountBalance('${a.id}')">💰</button>
+        <button class="btn btn-ghost btn-sm" onclick="editAccountBalance('${a.id}')">💰 Edit Balance</button>
         <button class="btn btn-ghost btn-sm" onclick="deleteAccount('${a.id}')">🗑</button>
       </div>
-    </div>`).join('') || '<p class="text-muted text-sm">No accounts yet</p>';
+    </div>`;
+  }).join('') || '<p class="text-muted text-sm">No accounts yet</p>';
 }
 
 function addAccount() {
@@ -2113,18 +2324,108 @@ function addAccount() {
 }
 
 function editAccountBalance(id) {
-  const a = DB.accounts.find(x=>x.id===id);
+  // Find account by id or by name (for backwards compat)
+  const a = DB.accounts.find(x=>x.id===id) || DB.accounts.find(x=>x.name===id);
   if (!a) return;
-  const v = prompt(`Update balance for ${a.name}:`, a.balance);
-  if (v === null || isNaN(v)) return;
-  a.balance = +v;
-  save('accounts'); renderAccountsList(); toast('Balance updated');
+  document.getElementById('bal-account-id').value   = a.id;
+  document.getElementById('bal-account-name').textContent = a.name;
+  document.getElementById('bal-current-display').textContent = fmt(computeRealBalance(a));
+  // Reset to initial tab
+  selectBalType('initial');
+  document.getElementById('bal-amount-initial').value = a.balance || 0;
+  document.getElementById('bal-amount-adjustment').value = '';
+  document.getElementById('bal-amount-correction').value = '';
+  document.getElementById('bal-adj-note').value = '';
+  openModal('account-balance-modal');
+}
+
+function computeRealBalance(a) {
+  const allTxns = DB.transactions.filter(t => t.account === a.name);
+  const inflow  = allTxns.filter(t=>t.type==='Income').reduce((s,t)=>s+t.amount,0);
+  const outflow = allTxns.filter(t=>t.type==='Expense').reduce((s,t)=>s+t.amount,0);
+  return (a.balance||0) + inflow - outflow;
+}
+
+let _currentBalType = 'initial';
+function selectBalType(type) {
+  _currentBalType = type;
+  document.querySelectorAll('.bal-type-option').forEach(el => {
+    const isActive = el.dataset.type === type;
+    el.style.border    = isActive ? '2px solid var(--rose)'   : '2px solid var(--border)';
+    el.style.background= isActive ? 'var(--blush)' : 'var(--off-white)';
+  });
+  document.getElementById('bal-input-initial').style.display    = type==='initial'    ? 'block' : 'none';
+  document.getElementById('bal-input-adjustment').style.display = type==='adjustment' ? 'block' : 'none';
+  document.getElementById('bal-input-correction').style.display = type==='correction' ? 'block' : 'none';
+}
+
+function updateAdjPreview() {
+  const id  = document.getElementById('bal-account-id').value;
+  const a   = DB.accounts.find(x=>x.id===id);
+  if (!a) return;
+  const cur = computeRealBalance(a);
+  const dir = document.getElementById('bal-adj-direction').value;
+  const amt = +document.getElementById('bal-amount-adjustment').value || 0;
+  const newBal = dir==='add' ? a.balance+amt : a.balance-amt;
+  document.getElementById('bal-adj-preview').innerHTML =
+    `Current recorded balance: <strong>${fmt(cur)}</strong><br>
+     Initial balance will change from <strong>${fmt(a.balance||0)}</strong> → <strong>${fmt(newBal)}</strong><br>
+     New real balance: <strong>${fmt(computeRealBalance({...a, balance:newBal}))}</strong>`;
+}
+
+function updateCorrectionPreview() {
+  const id  = document.getElementById('bal-account-id').value;
+  const a   = DB.accounts.find(x=>x.id===id);
+  if (!a) return;
+  const cur    = computeRealBalance(a);
+  const target = +document.getElementById('bal-amount-correction').value || 0;
+  const inflow  = DB.transactions.filter(t=>t.account===a.name&&t.type==='Income').reduce((s,t)=>s+t.amount,0);
+  const outflow = DB.transactions.filter(t=>t.account===a.name&&t.type==='Expense').reduce((s,t)=>s+t.amount,0);
+  const newInitial = target - inflow + outflow;
+  document.getElementById('bal-correction-preview').innerHTML =
+    `Current real balance: <strong>${fmt(cur)}</strong><br>
+     Will be corrected to: <strong>${fmt(target)}</strong><br>
+     Initial balance will be adjusted to: <strong>${fmt(newInitial)}</strong>`;
+}
+
+function saveAccountBalance() {
+  const id = document.getElementById('bal-account-id').value;
+  const a  = DB.accounts.find(x=>x.id===id);
+  if (!a) return;
+  const type = _currentBalType;
+
+  if (type === 'initial') {
+    const v = +document.getElementById('bal-amount-initial').value;
+    if (isNaN(v)) return toast('Enter a valid amount','error');
+    a.balance = v;
+    toast(`Initial balance set to ${fmt(v)} ✅`);
+  }
+  else if (type === 'adjustment') {
+    const dir = document.getElementById('bal-adj-direction').value;
+    const amt = +document.getElementById('bal-amount-adjustment').value;
+    if (!amt || isNaN(amt)) return toast('Enter a valid amount','error');
+    a.balance = dir==='add' ? (a.balance||0)+amt : (a.balance||0)-amt;
+    toast(`Balance ${dir==='add'?'increased':'decreased'} by ${fmt(amt)} ✅`);
+  }
+  else if (type === 'correction') {
+    const target  = +document.getElementById('bal-amount-correction').value;
+    if (isNaN(target)) return toast('Enter a valid amount','error');
+    const inflow  = DB.transactions.filter(t=>t.account===a.name&&t.type==='Income').reduce((s,t)=>s+t.amount,0);
+    const outflow = DB.transactions.filter(t=>t.account===a.name&&t.type==='Expense').reduce((s,t)=>s+t.amount,0);
+    a.balance = target - inflow + outflow;
+    toast(`Balance corrected to ${fmt(target)} ✅`);
+  }
+
+  save('accounts');
+  closeModal('account-balance-modal');
+  renderCurrentPage();
 }
 
 function deleteAccount(id) {
-  if (!confirm('Delete this account?')) return;
-  DB.accounts = DB.accounts.filter(a=>a.id!==id);
-  save('accounts'); renderAccountsList(); toast('Account deleted');
+  showConfirm('Delete this account?', () => {
+    DB.accounts = DB.accounts.filter(a=>a.id!==id);
+    save('accounts'); renderAccountsList(); toast('Account deleted');
+  });
 }
 
 function renderCategoriesList() {
@@ -2163,9 +2464,10 @@ function addCategory() {
 }
 
 function deleteCategory(id) {
-  if (!confirm('Delete this category and all its subcategories?')) return;
-  DB.categories = DB.categories.filter(c=>c.id!==id);
-  save('categories'); renderCategoriesList(); buildCatFilterOptions(); toast('Category deleted');
+  showConfirm('Delete this category and all its subcategories?', () => {
+    DB.categories = DB.categories.filter(c=>c.id!==id);
+    save('categories'); renderCategoriesList(); buildCatFilterOptions(); toast('Category deleted');
+  });
 }
 
 function openSubcatModal(catId) {
@@ -2239,7 +2541,20 @@ document.querySelectorAll('.modal-overlay').forEach(o => {
 
 function onTypeChange() {
   const type = document.getElementById('txn-type').value;
+  const isTransfer = type === 'Transfer';
+  // Show/hide transfer destination
+  document.getElementById('txn-to-account-wrap').style.display = isTransfer ? 'block' : 'none';
+  // Hide category fields for transfer (not needed)
+  const catWrap = document.getElementById('txn-cat').closest('.form-grid');
+  if (catWrap) catWrap.style.display = isTransfer ? 'none' : 'grid';
+  document.getElementById('txn-account-label').textContent = isTransfer ? 'From Account *' : 'Account *';
   populateTxnDropdowns(type,'','','');
+  // Populate to-account dropdown
+  if (isTransfer) {
+    const toSel = document.getElementById('txn-to-account');
+    toSel.innerHTML = '<option value="">Select destination account</option>' +
+      DB.accounts.map(a=>`<option value="${a.name}">${a.name}</option>`).join('');
+  }
 }
 
 function onCatChange() {
@@ -2266,16 +2581,49 @@ function populateTxnDropdowns(type, catVal, subcatVal, accVal) {
 function saveTxn() {
   const date   = document.getElementById('txn-date').value;
   const type   = document.getElementById('txn-type').value;
-  const cat    = document.getElementById('txn-cat').value;
-  const subcat = document.getElementById('txn-subcat').value;
   const desc   = document.getElementById('txn-desc').value.trim();
   const acc    = document.getElementById('txn-account').value;
   const amt    = +document.getElementById('txn-amount').value;
   const status = document.getElementById('txn-status').value;
-
-  if (!date||!type||!cat||!acc||!amt) return toast('Fill in all required fields','error');
-
   const editId = document.getElementById('txn-edit-id').value;
+
+  if (!date || !acc || !amt) return toast('Fill in all required fields','error');
+
+  if (type === 'Transfer') {
+    const toAcc = document.getElementById('txn-to-account').value;
+    if (!toAcc) return toast('Select a destination account','error');
+    if (toAcc === acc) return toast('Source and destination cannot be the same','error');
+    if (editId) {
+      // For edit, just update the outflow side
+      const t = DB.transactions.find(x=>x.id===editId);
+      Object.assign(t, { date, type:'Transfer', category:'Transfers', subcategory:'Bank Transfer', desc:desc||`Transfer to ${toAcc}`, account:acc, amount:amt, status, transferTo:toAcc });
+    } else {
+      // Create two transactions: outflow from source, inflow to destination
+      const transferId = uid();
+      DB.transactions.push({
+        id: transferId, date, type:'Transfer',
+        category:'Transfers', subcategory:'Bank Transfer',
+        desc: desc || `Transfer to ${toAcc}`,
+        account: acc, amount: amt, status, transferTo: toAcc
+      });
+      DB.transactions.push({
+        id: uid(), date, type:'Transfer',
+        category:'Transfers', subcategory:'Bank Transfer',
+        desc: desc || `Transfer from ${acc}`,
+        account: toAcc, amount: amt, status, transferFrom: acc, linkedId: transferId
+      });
+    }
+    save('transactions');
+    closeModal('txn-modal');
+    toast(`Transferred ${fmt(amt)} from ${acc} → ${toAcc} 🔄`);
+    renderCurrentPage();
+    return;
+  }
+
+  const cat    = document.getElementById('txn-cat').value;
+  const subcat = document.getElementById('txn-subcat').value;
+  if (!cat) return toast('Select a category','error');
+
   if (editId) {
     const t = DB.transactions.find(x=>x.id===editId);
     Object.assign(t, { date,type,category:cat,subcategory:subcat,desc,account:acc,amount:amt,status });
@@ -2381,12 +2729,13 @@ function download(name, url) {
 }
 
 function clearAllData() {
-  if (!confirm('Clear ALL data? This cannot be undone.')) return;
-  localStorage.clear(); location.reload();
+  showConfirm('Clear ALL data? This cannot be undone.', () => {
+    localStorage.clear(); location.reload();
+  }, { danger: true });
 }
 
 function loadSampleData(silent=false) {
-  if (!silent && !confirm('This will add sample transactions. Continue?')) return;
+  if (!silent) { showConfirm('Load sample data? This will add demo transactions.', () => loadSampleData(true)); return; }
   const rnd = (min,max)=>Math.floor(Math.random()*(max-min+1))+min;
   const pick = arr=>arr[Math.floor(Math.random()*arr.length)];
   const txns = [];
@@ -2436,6 +2785,46 @@ function loadSampleData(silent=false) {
 //  SAVE HELPER
 // ═══════════════════════════════════════════════════════════
 function save(key) { S.set(key, DB[key]); }
+
+// ═══════════════════════════════════════════════════════════
+//  CUSTOM DIALOGS (replaces browser confirm/prompt)
+// ═══════════════════════════════════════════════════════════
+let _confirmCallback = null;
+let _promptCallback  = null;
+
+function showConfirm(msg, onOk, opts={}) {
+  _confirmCallback = onOk;
+  document.getElementById('confirm-modal-msg').textContent = msg;
+  const okBtn = document.getElementById('confirm-modal-ok');
+  okBtn.textContent = opts.okLabel ||
+    (msg.toLowerCase().includes('delete') ? 'Delete' :
+     msg.toLowerCase().includes('clear')  ? 'Clear All' : 'Confirm');
+  okBtn.className = 'btn ' + (opts.danger === false ? 'btn-primary' : 'btn-danger');
+  document.getElementById('confirm-modal').classList.add('open');
+}
+
+function closeConfirm(confirmed) {
+  document.getElementById('confirm-modal').classList.remove('open');
+  if (confirmed && _confirmCallback) _confirmCallback();
+  _confirmCallback = null;
+}
+
+function showPrompt(msg, onValue, opts={}) {
+  _promptCallback = onValue;
+  document.getElementById('prompt-modal-msg').textContent = msg;
+  const input = document.getElementById('prompt-modal-input');
+  input.type        = opts.type        || 'number';
+  input.placeholder = opts.placeholder || '0';
+  input.value       = opts.defaultValue || '';
+  document.getElementById('prompt-modal').classList.add('open');
+  setTimeout(() => input.focus(), 120);
+}
+
+function closePrompt(value) {
+  document.getElementById('prompt-modal').classList.remove('open');
+  if (value !== null && value !== undefined && _promptCallback) _promptCallback(value);
+  _promptCallback = null;
+}
 
 // ═══════════════════════════════════════════════════════════
 //  TOAST
@@ -2930,29 +3319,32 @@ function save(key) {
 // Override deleteTxn to also delete from Supabase
 const _origDeleteTxn = window.deleteTxn;
 window.deleteTxn = function(id) {
-  if (!confirm('Delete this transaction?')) return;
-  DB.transactions = DB.transactions.filter(t=>t.id!==id);
-  S.set('transactions', DB.transactions);
-  if (_session) syncDeleteTransaction(id);
-  toast('Transaction deleted'); renderCurrentPage();
+  showConfirm('Delete this transaction?', () => {
+    DB.transactions = DB.transactions.filter(t=>t.id!==id);
+    S.set('transactions', DB.transactions);
+    if (_session) syncDeleteTransaction(id);
+    toast('Transaction deleted'); renderCurrentPage();
+  });
 };
 
 const _origDeleteBill = window.deleteBill;
 window.deleteBill = function(id) {
-  if (!confirm('Delete this bill?')) return;
-  DB.bills = DB.bills.filter(b=>b.id!==id);
-  S.set('bills', DB.bills);
-  if (_session) syncDeleteBill(id);
-  toast('Bill deleted'); renderBills();
+  showConfirm('Delete this bill?', () => {
+    DB.bills = DB.bills.filter(b=>b.id!==id);
+    S.set('bills', DB.bills);
+    if (_session) syncDeleteBill(id);
+    toast('Bill deleted'); renderBills();
+  });
 };
 
 const _origDeleteGoal = window.deleteGoal;
 window.deleteGoal = function(id) {
-  if (!confirm('Delete this goal?')) return;
-  DB.goals = DB.goals.filter(g=>g.id!==id);
-  S.set('goals', DB.goals);
-  if (_session) syncDeleteGoal(id);
-  toast('Goal deleted'); renderGoals();
+  showConfirm('Delete this goal?', () => {
+    DB.goals = DB.goals.filter(g=>g.id!==id);
+    S.set('goals', DB.goals);
+    if (_session) syncDeleteGoal(id);
+    toast('Goal deleted'); renderGoals();
+  });
 };
 
 // Override saveJournal to sync
@@ -2992,52 +3384,69 @@ async function tryRestoreSession() {
   } catch { return false; }
 }
 
-// ── BOOT SEQUENCE (overrides original init) ──────────────────
+// ── BOOT SEQUENCE ────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
-  // Hide app until auth confirmed
   document.getElementById('app').style.display = 'none';
 
-  // Try to restore existing session first
-  const existing = await tryRestoreSession();
-  if (existing) {
-    // Has valid session — load data and skip auth screen
-    setAuthLoading(true, 'Loading your data...');
-    document.getElementById('auth-loading').style.display = 'flex';
-    try {
-      // Init DB defaults first
-      DB.categories = S.get('categories') || JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
-      DB.accounts   = S.get('accounts')   || JSON.parse(JSON.stringify(DEFAULT_ACCOUNTS));
-      DB.budgets    = S.get('budgets')     || JSON.parse(JSON.stringify(DEFAULT_BUDGETS));
-      DB.bills      = S.get('bills')       || JSON.parse(JSON.stringify(DEFAULT_BILLS));
-      DB.goals      = S.get('goals')       || JSON.parse(JSON.stringify(DEFAULT_GOALS));
-      DB.settings   = S.get('settings')   || JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
-      DB.transactions = S.get('transactions') || [];
-      DB.journals   = S.get('journals')   || {};
+  // Always load local cache first for instant display
+  DB.categories   = S.get('categories')   || JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
+  DB.accounts     = S.get('accounts')     || JSON.parse(JSON.stringify(DEFAULT_ACCOUNTS));
+  DB.budgets      = S.get('budgets')      || JSON.parse(JSON.stringify(DEFAULT_BUDGETS));
+  DB.bills        = S.get('bills')        || JSON.parse(JSON.stringify(DEFAULT_BILLS));
+  DB.goals        = S.get('goals')        || JSON.parse(JSON.stringify(DEFAULT_GOALS));
+  DB.settings     = S.get('settings')     || JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+  DB.transactions = S.get('transactions') || [];
+  DB.journals     = S.get('journals')     || {};
 
-      await loadFromSupabase();
-      hideAuthScreen(existing.user);
+  // Check if we have a stored session
+  const stored = localStorage.getItem('fos_session');
+  if (stored) {
+    try {
+      const sess = JSON.parse(stored);
+      // Use stored session immediately — show app right away
+      _session = sess;
+      hideAuthScreen(sess.user);
       loadSettingsUI();
       setPeriod('this-month');
       navigate('dashboard');
+      // Refresh token + sync from Supabase in background
+      refreshSessionBackground(sess);
     } catch(e) {
-      console.error('Restore error:', e);
-      hideAuthScreen(existing.user);
-      init_local();
+      localStorage.removeItem('fos_session');
+      showAuthForm();
     }
   } else {
-    // Show auth screen
-    document.getElementById('auth-screen').style.display = 'flex';
-    // Still init local DB so defaults are ready
-    DB.categories   = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
-    DB.accounts     = JSON.parse(JSON.stringify(DEFAULT_ACCOUNTS));
-    DB.budgets      = JSON.parse(JSON.stringify(DEFAULT_BUDGETS));
-    DB.bills        = JSON.parse(JSON.stringify(DEFAULT_BILLS));
-    DB.goals        = JSON.parse(JSON.stringify(DEFAULT_GOALS));
-    DB.settings     = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
-    DB.transactions = [];
-    DB.journals     = {};
+    showAuthForm();
   }
 });
+
+function showAuthForm() {
+  document.getElementById('auth-screen').style.display = 'flex';
+}
+
+async function refreshSessionBackground(sess) {
+  try {
+    const r = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'apikey': SUPABASE_ANON },
+      body: JSON.stringify({ refresh_token: sess.refresh_token })
+    });
+    if (!r.ok) return;
+    const fresh = await r.json();
+    if (fresh.error) return;
+    _session = fresh;
+    localStorage.setItem('fos_session', JSON.stringify({
+      access_token: fresh.access_token,
+      refresh_token: fresh.refresh_token,
+      user: fresh.user
+    }));
+    // Sync latest data from Supabase silently
+    await loadFromSupabase();
+    renderCurrentPage();
+  } catch(e) {
+    console.log('Background refresh failed, using cached data');
+  }
+}
 
 function init_local() {
   loadSettingsUI();
