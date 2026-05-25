@@ -415,7 +415,7 @@ hr.divider{border:none;border-top:1px solid var(--border);margin:14px 0}
           <div style="font-size:12px;font-weight:700;color:var(--text-mid);margin-bottom:10px">Add New Category</div>
           <div class="flex" style="gap:8px;flex-wrap:wrap">
             <input class="form-control" id="new-cat-name" placeholder="Category name" style="flex:1;min-width:140px">
-            <select class="form-control" id="new-cat-type" style="width:130px"><option>Expense</option><option>Income</option><option>Transfer</option></select>
+            <select class="form-control" id="new-cat-type" style="width:130px"><option>Expense</option><option>Income</option></select>
             <button class="btn btn-primary btn-sm" onclick="addCategory()">+ Add</button>
           </div>
         </div>
@@ -822,7 +822,9 @@ let currentPage = 'dashboard';
 let charts = {};
 let txnPageNum = 0;
 const TXN_PAGE = 50;
-let _catFilterName = null;  // for clicking category → filter transactions
+let _catFilterName = null;   // filter transactions by category
+let _accFilterName  = null;   // filter transactions by account
+let _typeFilterName = null;   // filter transactions by type (Income/Expense)
 let _confirmCb = null;
 let _promptCb  = null;
 let _txnStatus = 'paid';    // current status selection in txn form
@@ -1015,6 +1017,26 @@ function filteredTxns(){ return DB.transactions.filter(t=>inPeriod(t.date)); }
 
 // ── NAVIGATE ─────────────────────────────────
 function navigate(pg) {
+  // Clear transaction filters when navigating AWAY from transactions
+  // But keep them when navigating TO transactions (they were set intentionally)
+  if (currentPage === 'transactions' && pg !== 'transactions') {
+    _catFilterName  = null;
+    _accFilterName  = null;
+    _typeFilterName = null;
+    // Reset dropdowns too
+    const tc = document.getElementById('txn-filter-cat');
+    const tt = document.getElementById('txn-filter-type');
+    if (tc) tc.value = '';
+    if (tt) tt.value = '';
+  }
+  // Also clear filters when navigating away from analytics
+  // so analytics tab doesn't retain stale category state
+  if (currentPage === 'analytics' && pg !== 'analytics' && pg !== 'transactions') {
+    _catFilterName  = null;
+    _accFilterName  = null;
+    _typeFilterName = null;
+  }
+
   currentPage=pg;
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.page===pg));
@@ -1110,25 +1132,28 @@ function renderDashboard() {
   const billsTotal=activeBills.reduce((a,b)=>a+b.amount,0);
 
   document.getElementById('kpi-grid').innerHTML=[
-    {label:'Total Balance',value:fmt(totalBal),icon:'💰',sub:'All accounts',cls:'nude'},
-    {label:'Period Income',value:fmt(income),icon:'📥',sub:'This period',cls:'mint'},
-    {label:'Period Expense',value:fmt(expense),icon:'📤',sub:'This period',cls:'rose'},
-    {label:'Net Saved',value:fmt(net),icon:'💎',sub:(savRate*100).toFixed(1)+'% rate',cls:'lav'},
-    {label:'Budget Used',value:(budgetUsed*100).toFixed(0)+'%',icon:'🎯',sub:fmt(expense)+'/'+fmt(totalBudget),cls:budgetUsed>1?'rose':budgetUsed>0.8?'warn':'mint'},
-    {label:'Monthly Bills',value:fmt(billsTotal),icon:'🔔',sub:activeBills.length+' active',cls:'mauve'},
-  ].map(k=>`<div class="kpi-card ${k.cls}"><div class="kpi-icon">${k.icon}</div><div class="kpi-label">${k.label}</div><div class="kpi-value">${k.value}</div><div class="kpi-sub">${k.sub}</div></div>`).join('');
+    {label:'Total Balance',   value:fmt(totalBal), icon:'💰', sub:'Click to see all accounts',      cls:'nude',   action:"navigate('analytics');switchTab('analytics','by-account')"},
+    {label:'Period Income',   value:fmt(income),   icon:'📥', sub:'Click to see income',            cls:'mint',   action:"filterTxnByType('Income')"},
+    {label:'Period Expense',  value:fmt(expense),  icon:'📤', sub:'Click to see expenses',          cls:'rose',   action:"filterTxnByType('Expense')"},
+    {label:'Net Saved',       value:fmt(net),      icon:'💎', sub:net<0?'⚠️ Expense > Income — click to review':(savRate*100).toFixed(1)+'% savings rate', cls:net<0?'rose':'lav', action:net<0?"filterTxnByType('Expense')":`filterTxnByType('Income')`},
+    {label:'Budget Used',     value:(budgetUsed*100).toFixed(0)+'%', icon:'🎯', sub:'Click to see budget', cls:budgetUsed>1?'rose':budgetUsed>0.8?'warn':'mint', action:"navigate('budget')"},
+    {label:'Monthly Bills',   value:fmt(billsTotal),icon:'🔔', sub:activeBills.length+' active',   cls:'mauve',  action:"navigate('bills')"},
+  ].map(k=>`<div class="kpi-card ${k.cls}" style="cursor:pointer" onclick="${k.action}" title="${k.sub}">
+    <div class="kpi-icon">${k.icon}</div>
+    <div class="kpi-label">${k.label}</div>
+    <div class="kpi-value">${k.value}</div>
+    <div class="kpi-sub">${k.sub}</div>
+  </div>`).join('');
 
   // Account balances list
   const accEl=document.getElementById('dash-acc-balances');
   accEl.innerHTML=DB.accounts.map(a=>{
     const bal=computeRealBalance(a);
-    const typeColors={Debit:'#0070BA',Credit:'#C94F4F','E-Wallet':'#01A64E',Cash:'#9B6B6B',Loan:'#E8A0A0',Investment:'#A8C8A8'};
-    const tc=typeColors[a.type]||a.color||'#ccc';
-    return `<div class="acc-balance-item" onclick="navigate('analytics');switchTab('analytics','by-account')" title="View account analytics">
-      <div class="acc-dot" style="background:${a.color||tc}"></div>
+    return `<div class="acc-balance-item" onclick="filterTxnByAccount('${a.name}')" title="View transactions for ${a.name}">
+      <div class="acc-dot" style="background:${a.color||'#ccc'}"></div>
       <div style="flex:1">
         <div class="acc-bal-name">${a.name}</div>
-        <div class="acc-bal-type">${a.type}</div>
+        <div class="acc-bal-type">${a.type} · click to view transactions</div>
       </div>
       <div class="acc-bal-amount" style="color:${bal>=0?'#5CAD7A':'#C96B6B'}">${fmt(bal)}</div>
       <button class="btn btn-ghost btn-icon btn-sm" onclick="event.stopPropagation();openBalModal('${a.id}')" title="Edit balance">✏️</button>
@@ -1139,7 +1164,8 @@ function renderDashboard() {
   const catTotals={};
   txns.filter(t=>t.type==='Expense').forEach(t=>{catTotals[t.category]=(catTotals[t.category]||0)+t.amount;});
   const sorted=Object.entries(catTotals).sort((a,b)=>b[1]-a[1]);
-  makePie('chart-donut', sorted.map(x=>x[0]), sorted.map(x=>x[1]), sorted.map(x=>catColor(x[0])));
+  makePie('chart-donut', sorted.map(x=>x[0]), sorted.map(x=>x[1]), sorted.map(x=>catColor(x[0])),
+    (evt,items)=>{ if(items.length>0){ const cat=sorted[items[0].index]?.[0]; if(cat) filterTxnByCategory(cat); } });
 
   // Bar — monthly
   const mo=monthlyData(), keys=Object.keys(mo).sort().slice(-6);
@@ -1189,7 +1215,26 @@ function renderDashboard() {
 //  TRANSACTIONS
 // ══════════════════════════════════════
 function filterTxnByCategory(catName) {
-  _catFilterName=catName;
+  _catFilterName = catName;
+  _accFilterName  = null;
+  _typeFilterName = null;
+  txnPageNum = 0;
+  navigate('transactions');
+}
+
+function filterTxnByAccount(accName) {
+  _accFilterName  = accName;
+  _catFilterName  = null;
+  _typeFilterName = null;
+  txnPageNum = 0;
+  navigate('transactions');
+}
+
+function filterTxnByType(type) {
+  _typeFilterName = type;
+  _catFilterName  = null;
+  _accFilterName  = null;
+  txnPageNum = 0;
   navigate('transactions');
 }
 
@@ -1197,18 +1242,28 @@ function renderTransactions() {
   buildCatFilterSel();
   const search=(document.getElementById('txn-search')?.value||'').toLowerCase();
   const typeF=document.getElementById('txn-filter-type')?.value||'';
-  const catF=document.getElementById('txn-filter-cat')?.value||_catFilterName||'';
-  if(_catFilterName) document.getElementById('txn-filter-cat').value=_catFilterName;
+  const catF=document.getElementById('txn-filter-cat')?.value||'';
+
+  // Apply programmatic filters from dashboard clicks (override dropdowns)
+  const activeCatFilter = _catFilterName || catF;
+  const activeTypeFilter = _typeFilterName || typeF;
+  const activeAccFilter  = _accFilterName || '';
+
+  if(_catFilterName)  document.getElementById('txn-filter-cat').value=_catFilterName;
+  if(_typeFilterName) document.getElementById('txn-filter-type').value=_typeFilterName;
 
   // Show active filter chip
   const chipEl=document.getElementById('txn-cat-filter-chip');
-  if(_catFilterName) {
-    chipEl.innerHTML=`<div class="cat-filter-chip">Filtered: ${_catFilterName} <button onclick="_catFilterName=null;renderTransactions()">✕</button></div>`;
-  } else { chipEl.innerHTML=''; }
+  const chips = [];
+  if(_catFilterName)  chips.push(`<div class="cat-filter-chip">Category: ${_catFilterName} <button onclick="_catFilterName=null;document.getElementById('txn-filter-cat').value='';renderTransactions()">✕</button></div>`);
+  if(_accFilterName)  chips.push(`<div class="cat-filter-chip">Account: ${_accFilterName} <button onclick="_accFilterName=null;renderTransactions()">✕</button></div>`);
+  if(_typeFilterName) chips.push(`<div class="cat-filter-chip">Type: ${_typeFilterName} <button onclick="_typeFilterName=null;document.getElementById('txn-filter-type').value='';renderTransactions()">✕</button></div>`);
+  chipEl.innerHTML = chips.join('');
 
   let txns=filteredTxns();
-  if(typeF) txns=txns.filter(t=>t.type===typeF);
-  if(catF)  txns=txns.filter(t=>t.category===catF);
+  if(activeTypeFilter) txns=txns.filter(t=>t.type===activeTypeFilter);
+  if(activeCatFilter)  txns=txns.filter(t=>t.category===activeCatFilter);
+  if(activeAccFilter)  txns=txns.filter(t=>t.account===activeAccFilter);
   if(search) txns=txns.filter(t=>(t.desc||'').toLowerCase().includes(search)||(t.category||'').toLowerCase().includes(search)||(t.subcategory||'').toLowerCase().includes(search));
   txns.sort((a,b)=>new Date(b.date)-new Date(a.date));
 
@@ -1349,14 +1404,14 @@ function renderAccAnalytics(txns) {
   }).join('');
   document.getElementById('acc-detail-tbody').innerHTML=entries.map(a=>{
     const bal=computeRealBalance(a);
-    return `<tr>
+    return `<tr style="cursor:pointer" onclick="filterTxnByAccount('${a.name}')" title="View transactions for ${a.name}">
       <td><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:50%;background:${a.color}"></span>${a.name}</span></td>
       <td class="text-muted">${a.type}</td>
       <td class="amount-pos">${fmt(a.pIn)}</td>
       <td class="amount-neg">${fmt(a.pOut)}</td>
       <td class="${bal>=0?'amount-pos':'amount-neg'} font-bold">${fmt(bal)}</td>
       <td>${a.count}</td>
-      <td><button class="btn btn-ghost btn-sm" onclick="openBalModal('${a.id}')">✏️ Edit</button></td>
+      <td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openBalModal('${a.id}')">✏️ Edit</button></td>
     </tr>`;
   }).join('');
 }
@@ -2058,6 +2113,12 @@ function switchTab(page,tab) {
   const pg=document.getElementById('page-'+page); if(!pg) return;
   pg.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.getAttribute('onclick').includes("'"+tab+"'")));
   pg.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id===page+'-'+tab));
+  // Clear transaction filters when switching analytics tabs (not going to transactions)
+  if (page === 'analytics') {
+    _catFilterName  = null;
+    _accFilterName  = null;
+    _typeFilterName = null;
+  }
   renderPage();
 }
 
