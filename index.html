@@ -186,7 +186,13 @@ hr.divider{border:none;border-top:1px solid var(--border);margin:14px 0}
     <div class="nav-label">System</div>
     <div class="nav-item" data-page="settings"><span class="icon">⚙️</span>Settings</div>
   </nav>
-  <div class="sidebar-footer">Finance OS v2.0 · Cloud Sync</div>
+  <div class="sidebar-footer">
+  <div id="cloud-status" style="display:flex;align-items:center;gap:5px;justify-content:center;margin-bottom:4px">
+    <span id="cloud-dot" style="width:7px;height:7px;border-radius:50%;background:#F0C070;flex-shrink:0"></span>
+    <span id="cloud-text" style="font-size:10px;color:rgba(255,255,255,.4)">Connecting...</span>
+  </div>
+  <div style="font-size:9px;color:rgba(255,255,255,.2);text-align:center">Finance OS v2.0</div>
+</div>
 </aside>
 <div class="main">
   <div class="topbar">
@@ -836,9 +842,17 @@ function initDB() {
 }
 
 // ── SAVE (local + cloud) ────────────────────
+function uid_user() {
+  // Safe extraction — session may be stored in different shapes
+  return _session?.user?.id || _session?.user_id || null;
+}
+
 function save(key) {
   LS.set(key, DB[key]);
-  if (!_session) return;
+  if (!_session || !uid_user()) {
+    console.warn('save() called but no valid session, skipping cloud sync for:', key);
+    return;
+  }
   if (key==='transactions') _syncTxns();
   if (key==='categories')   _syncCats();
   if (key==='accounts')     _syncAccs();
@@ -860,63 +874,88 @@ function hideSync(ok=true){ document.getElementById('sync-dot').style.background
 
 function _syncTxns() {
   _debounceSync('txns', async()=>{
-    showSync('Saving transactions...');
+    const uid = uid_user();
+    if (!uid) { console.warn('No user ID, skipping txn sync'); return; }
+    setCloudStatus('syncing');
+    showSync('Saving...');
     try {
-      const uid=_session.user.id;
-      await sbUpsert('transactions', DB.transactions.map(t=>({
+      const payload = DB.transactions.map(t=>({
         id:t.id, user_id:uid, date:t.date, type:t.type,
         category:t.category||'', subcategory:t.subcategory||null,
         description:t.desc||null, account:t.account||'',
         amount:t.amount, status:t.status||null,
         recurring_data:t.recurringData?JSON.stringify(t.recurringData):null
-      })));
-      hideSync(true);
-    } catch(e){ console.error(e); hideSync(false); }
-  });
+      }));
+      await sbUpsert('transactions', payload);
+      hideSync(true); setCloudStatus('synced');
+    } catch(e){
+      console.error('Sync txns failed:', e);
+      hideSync(false);
+      toast('⚠️ Cloud sync failed. Data saved locally.', 'error');
+      setCloudStatus('error');
+    }
+  }, 400);
 }
-async function _syncDeleteTxn(id){ try{ await sbDelete('transactions',`id=eq.${id}`); } catch(e){ console.error(e); } }
+async function _syncDeleteTxn(id){
+  const uid=uid_user(); if(!uid) return;
+  try{ await sbDelete('transactions',`id=eq.${id}&user_id=eq.${uid}`); } catch(e){ console.error('Delete txn:', e); }
+}
 function _syncCats() {
   _debounceSync('cats', async()=>{
-    try{ await sbUpsert('categories', DB.categories.map(c=>({...c,user_id:_session.user.id}))); } catch(e){ console.error(e); }
-  });
+    const uid=uid_user(); if(!uid) return;
+    try{ await sbUpsert('categories', DB.categories.map(c=>({...c,user_id:uid}))); } catch(e){ console.error('Sync cats:', e); }
+  }, 400);
 }
 function _syncAccs() {
   _debounceSync('accs', async()=>{
-    showSync('Saving accounts...');
-    try{ await sbUpsert('accounts', DB.accounts.map(a=>({...a,user_id:_session.user.id}))); hideSync(true); } catch(e){ console.error(e); hideSync(false); }
-  });
+    const uid=uid_user(); if(!uid) return;
+    showSync('Saving...');
+    try{ await sbUpsert('accounts', DB.accounts.map(a=>({...a,user_id:uid}))); hideSync(true); } catch(e){ console.error('Sync accs:', e); hideSync(false); }
+  }, 400);
 }
 function _syncBudgets() {
   _debounceSync('bud', async()=>{
-    try{ await sbUpsert('budgets',[{user_id:_session.user.id,data:DB.budgets}]); } catch(e){ console.error(e); }
-  });
+    const uid=uid_user(); if(!uid) return;
+    try{ await sbUpsert('budgets',[{user_id:uid,data:DB.budgets}]); } catch(e){ console.error('Sync budgets:', e); }
+  }, 400);
 }
 function _syncBills() {
   _debounceSync('bills', async()=>{
-    showSync('Saving bills...');
-    try{ await sbUpsert('bills', DB.bills.map(b=>({...b,user_id:_session.user.id}))); hideSync(true); } catch(e){ console.error(e); hideSync(false); }
-  });
+    const uid=uid_user(); if(!uid) return;
+    showSync('Saving...');
+    try{ await sbUpsert('bills', DB.bills.map(b=>({...b,user_id:uid}))); hideSync(true); } catch(e){ console.error('Sync bills:', e); hideSync(false); }
+  }, 400);
 }
-async function _syncDeleteBill(id){ try{ await sbDelete('bills',`id=eq.${id}`); } catch(e){ console.error(e); } }
+async function _syncDeleteBill(id){
+  const uid=uid_user(); if(!uid) return;
+  try{ await sbDelete('bills',`id=eq.${id}&user_id=eq.${uid}`); } catch(e){ console.error('Delete bill:', e); }
+}
 function _syncGoals() {
   _debounceSync('goals', async()=>{
-    try{ await sbUpsert('goals', DB.goals.map(g=>({...g,user_id:_session.user.id}))); } catch(e){ console.error(e); }
-  });
+    const uid=uid_user(); if(!uid) return;
+    try{ await sbUpsert('goals', DB.goals.map(g=>({...g,user_id:uid}))); } catch(e){ console.error('Sync goals:', e); }
+  }, 400);
 }
-async function _syncDeleteGoal(id){ try{ await sbDelete('goals',`id=eq.${id}`); } catch(e){ console.error(e); } }
+async function _syncDeleteGoal(id){
+  const uid=uid_user(); if(!uid) return;
+  try{ await sbDelete('goals',`id=eq.${id}&user_id=eq.${uid}`); } catch(e){ console.error('Delete goal:', e); }
+}
 function _syncSettings() {
   _debounceSync('sets', async()=>{
-    try{ await sbUpsert('settings',[{user_id:_session.user.id,data:DB.settings}]); } catch(e){ console.error(e); }
-  });
+    const uid=uid_user(); if(!uid) return;
+    try{ await sbUpsert('settings',[{user_id:uid,data:DB.settings}]); } catch(e){ console.error('Sync settings:', e); }
+  }, 600);
 }
 async function _syncJournal(key){
+  const uid=uid_user(); if(!uid) return;
   const j=DB.journals[key]||{};
-  try{ await sbUpsert('journals',[{user_id:_session.user.id,month_key:key,wins:j.wins||'',lessons:j.lessons||'',next:j.next||''}]); } catch(e){ console.error(e); }
+  try{ await sbUpsert('journals',[{user_id:uid,month_key:key,wins:j.wins||'',lessons:j.lessons||'',next:j.next||''}]); } catch(e){ console.error('Sync journal:', e); }
 }
 
 // ── LOAD FROM SUPABASE ──────────────────────
 async function loadFromCloud() {
-  const uid=_session.user.id;
+  const uid = uid_user();
+  if (!uid) throw new Error('No user ID available for cloud load');
   const [txns,cats,accs,bud,bills,goals,sets,journals] = await Promise.all([
     sbSelect('transactions',`user_id=eq.${uid}&order=date.desc`),
     sbSelect('categories',`user_id=eq.${uid}`),
@@ -2130,10 +2169,24 @@ async function doForgotPassword() {
   await sbAuth('/recover',{email}); showAuthError('login','✅ Reset link sent!');
 }
 async function onLoginSuccess(sess,nameHint='') {
+  // Normalize: ensure user object is always present
+  if (!sess.user && sess.user_id) sess.user = {id: sess.user_id, email: sess.email};
   _session=sess;
-  localStorage.setItem('fos2_session',JSON.stringify({access_token:sess.access_token,refresh_token:sess.refresh_token,user:sess.user}));
+  const stored = {
+    access_token: sess.access_token,
+    refresh_token: sess.refresh_token,
+    user: sess.user,
+    // also store flat for fallback
+    user_id: sess.user?.id,
+  };
+  localStorage.setItem('fos2_session', JSON.stringify(stored));
   setAuthLoading(true,'Loading your data...');
-  try { await loadFromCloud(); } catch(e){ console.error('Cloud load err:',e); }
+  try {
+    await loadFromCloud();
+  } catch(e){
+    console.error('Cloud load err:',e);
+    toast('⚠️ Could not load cloud data. Using local cache.','error');
+  }
   showApp(sess.user,nameHint);
 }
 function showApp(user,nameHint='') {
@@ -2159,6 +2212,26 @@ function toggleUserMenu(force) {
 document.addEventListener('click',e=>{ if(!e.target.closest('#user-menu-btn')&&!e.target.closest('#user-dropdown')) toggleUserMenu(false); });
 
 // ══════════════════════════════════════
+//  CLOUD STATUS INDICATOR
+// ══════════════════════════════════════
+function setCloudStatus(state) {
+  // state: 'connecting' | 'synced' | 'error' | 'offline'
+  const dot  = document.getElementById('cloud-dot');
+  const text = document.getElementById('cloud-text');
+  if (!dot || !text) return;
+  const map = {
+    connecting: ['#F0C070', 'Connecting...'],
+    syncing:    ['#F0C070', 'Syncing...'],
+    synced:     ['#A8C8A8', '☁️ Cloud synced'],
+    error:      ['#E8A0A0', '⚠️ Sync error'],
+    offline:    ['#D4B8A5', '💾 Local only'],
+  };
+  const [color, label] = map[state] || map.offline;
+  dot.style.background = color;
+  text.textContent = label;
+}
+
+// ══════════════════════════════════════
 //  BOOT
 // ══════════════════════════════════════
 window.addEventListener('DOMContentLoaded',async()=>{
@@ -2167,7 +2240,11 @@ window.addEventListener('DOMContentLoaded',async()=>{
   if(stored) {
     try {
       const sess=JSON.parse(stored);
+      // Normalize session — ensure user object exists
+      if (!sess.user && sess.user_id) sess.user = {id: sess.user_id};
       _session=sess;
+      // Verify we actually have a usable session
+      if (!uid_user()) throw new Error('Invalid session structure');
       // Show app immediately from cache
       showApp(sess.user);
       // Refresh token + sync in background
@@ -2179,15 +2256,21 @@ window.addEventListener('DOMContentLoaded',async()=>{
         if(r.ok){
           const fresh=await r.json();
           if(!fresh.error){
+            if (!fresh.user && fresh.user_id) fresh.user = {id: fresh.user_id};
             _session=fresh;
-            localStorage.setItem('fos2_session',JSON.stringify({access_token:fresh.access_token,refresh_token:fresh.refresh_token,user:fresh.user}));
+            localStorage.setItem('fos2_session',JSON.stringify({
+              access_token:fresh.access_token,
+              refresh_token:fresh.refresh_token,
+              user:fresh.user,
+              user_id:fresh.user?.id,
+            }));
             await loadFromCloud();
             renderPage();
           }
         }
       } catch(e){ console.log('Background refresh failed, using cache'); }
     } catch(e){ localStorage.removeItem('fos2_session'); showAuthScreen(); }
-  } else { showAuthScreen(); }
+  } else { setCloudStatus('offline'); showAuthScreen(); }
 });
 
 function showAuthScreen() {
