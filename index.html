@@ -850,11 +850,17 @@ function uid_user() {
 }
 
 function save(key) {
+  // Always save to localStorage first (instant, offline-safe)
   LS.set(key, DB[key]);
+
   if (!_session || !uid_user()) {
-    console.warn('save() called but no valid session, skipping cloud sync for:', key);
+    console.warn('save(): no valid session — saved locally only:', key);
+    setCloudStatus('offline');
     return;
   }
+
+  // Then sync to Supabase cloud
+  setCloudStatus('syncing');
   if (key==='transactions') _syncTxns();
   if (key==='categories')   _syncCats();
   if (key==='accounts')     _syncAccs();
@@ -983,8 +989,9 @@ async function loadFromCloud() {
   if (!bills?.length){ DB.bills=JSON.parse(JSON.stringify(DEF_BILLS)); _syncBills(); }
   if (!goals?.length){ DB.goals=JSON.parse(JSON.stringify(DEF_GOALS)); _syncGoals(); }
   if (!sets)         { DB.settings=JSON.parse(JSON.stringify(DEF_SETTINGS)); _syncSettings(); }
-  // Persist to localStorage
-  Object.keys(DB).forEach(k=>LS.set(k,DB[k]));
+  // Always persist all cloud data to localStorage (keeps cache in sync)
+  Object.keys(DB).forEach(k => LS.set(k, DB[k]));
+  console.log('✅ Cloud data loaded and persisted to localStorage');
 }
 
 // ── PERIOD ──────────────────────────────────
@@ -2229,26 +2236,32 @@ async function doForgotPassword() {
   if(!email) return showAuthError('login','Enter your email first');
   await sbAuth('/recover',{email}); showAuthError('login','✅ Reset link sent!');
 }
-async function onLoginSuccess(sess,nameHint='') {
-  // Normalize: ensure user object is always present
-  if (!sess.user && sess.user_id) sess.user = {id: sess.user_id, email: sess.email};
-  _session=sess;
-  const stored = {
-    access_token: sess.access_token,
+async function onLoginSuccess(sess, nameHint='') {
+  // Normalize session structure
+  if (!sess.user && sess.user_id) sess.user = { id: sess.user_id, email: sess.email };
+  _session = sess;
+
+  // Persist session to localStorage
+  localStorage.setItem('fos2_session', JSON.stringify({
+    access_token:  sess.access_token,
     refresh_token: sess.refresh_token,
-    user: sess.user,
-    // also store flat for fallback
-    user_id: sess.user?.id,
-  };
-  localStorage.setItem('fos2_session', JSON.stringify(stored));
-  setAuthLoading(true,'Loading your data...');
+    user:          sess.user,
+    user_id:       sess.user?.id,
+  }));
+
+  setAuthLoading(true, 'Loading your data...');
+
+  // Load all data from Supabase before showing app
   try {
     await loadFromCloud();
-  } catch(e){
-    console.error('Cloud load err:',e);
-    toast('⚠️ Could not load cloud data. Using local cache.','error');
+    setCloudStatus('synced');
+  } catch(e) {
+    console.error('Cloud load failed after login:', e);
+    setCloudStatus('error');
+    toast('⚠️ Cloud sync issue. Data may be incomplete.', 'error');
   }
-  showApp(sess.user,nameHint);
+
+  showApp(sess.user, nameHint);
 }
 function showApp(user,nameHint='') {
   document.getElementById('auth-screen').style.display='none';
@@ -2295,43 +2308,84 @@ function setCloudStatus(state) {
 // ══════════════════════════════════════
 //  BOOT
 // ══════════════════════════════════════
-window.addEventListener('DOMContentLoaded',async()=>{
+window.addEventListener('DOMContentLoaded', async () => {
+  // Show loading spinner over blank screen
+  document.getElementById('auth-screen').style.display = 'flex';
+  document.getElementById('auth-loading').style.display = 'flex';
+  document.getElementById('auth-loading-msg').textContent = 'Loading...';
+  document.getElementById('app').style.display = 'none';
+
   initDB();
-  const stored=localStorage.getItem('fos2_session');
-  if(stored) {
-    try {
-      const sess=JSON.parse(stored);
-      // Normalize session — ensure user object exists
-      if (!sess.user && sess.user_id) sess.user = {id: sess.user_id};
-      _session=sess;
-      // Verify we actually have a usable session
-      if (!uid_user()) throw new Error('Invalid session structure');
-      // Show app immediately from cache
-      showApp(sess.user);
-      // Refresh token + sync in background
-      try {
-        const r=await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`,{
-          method:'POST',headers:{'Content-Type':'application/json',apikey:SB_ANON},
-          body:JSON.stringify({refresh_token:sess.refresh_token})
-        });
-        if(r.ok){
-          const fresh=await r.json();
-          if(!fresh.error){
-            if (!fresh.user && fresh.user_id) fresh.user = {id: fresh.user_id};
-            _session=fresh;
-            localStorage.setItem('fos2_session',JSON.stringify({
-              access_token:fresh.access_token,
-              refresh_token:fresh.refresh_token,
-              user:fresh.user,
-              user_id:fresh.user?.id,
-            }));
-            await loadFromCloud();
-            renderPage();
-          }
-        }
-      } catch(e){ console.log('Background refresh failed, using cache'); }
-    } catch(e){ localStorage.removeItem('fos2_session'); showAuthScreen(); }
-  } else { setCloudStatus('offline'); showAuthScreen(); }
+
+  const stored = localStorage.getItem('fos2_session');
+  if (!stored) {
+    // No session — show login form
+    document.getElementById('auth-loading').style.display = 'none';
+    setCloudStatus('offline');
+    return;
+  }
+
+  let sess;
+  try { sess = JSON.parse(stored); } 
+  catch { localStorage.removeItem('fos2_session'); document.getElementById('auth-loading').style.display='none'; return; }
+
+  // Step 1: Try to refresh the token (ensures we have a valid active session)
+  document.getElementById('auth-loading-msg').textContent = 'Connecting to cloud...';
+  try {
+    const r = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: SB_ANON },
+      body: JSON.stringify({ refresh_token: sess.refresh_token })
+    });
+    const fresh = await r.json();
+
+    if (r.ok && !fresh.error) {
+      // Token refreshed successfully — use fresh session
+      if (!fresh.user && fresh.user_id) fresh.user = { id: fresh.user_id };
+      _session = fresh;
+      localStorage.setItem('fos2_session', JSON.stringify({
+        access_token:  fresh.access_token,
+        refresh_token: fresh.refresh_token,
+        user:          fresh.user,
+        user_id:       fresh.user?.id,
+      }));
+    } else {
+      // Token refresh failed — try using stored session as-is
+      console.warn('Token refresh failed, using stored session:', fresh.error);
+      if (!sess.user && sess.user_id) sess.user = { id: sess.user_id };
+      _session = sess;
+    }
+  } catch (e) {
+    // Network error — use stored session (offline mode)
+    console.warn('Network error during refresh, using cached session');
+    if (!sess.user && sess.user_id) sess.user = { id: sess.user_id };
+    _session = sess;
+  }
+
+  // Verify we have a usable user ID
+  if (!uid_user()) {
+    console.error('No valid user ID found in session, showing login');
+    localStorage.removeItem('fos2_session');
+    _session = null;
+    document.getElementById('auth-loading').style.display = 'none';
+    setCloudStatus('offline');
+    return;
+  }
+
+  // Step 2: Load data from cloud (always attempt, fall back to localStorage)
+  document.getElementById('auth-loading-msg').textContent = 'Loading your data...';
+  try {
+    await loadFromCloud();
+    setCloudStatus('synced');
+  } catch (e) {
+    console.error('Cloud load failed, using local cache:', e);
+    setCloudStatus('error');
+    // Data from initDB() (localStorage) is still available
+  }
+
+  // Step 3: Show app
+  document.getElementById('auth-loading').style.display = 'none';
+  showApp(_session.user);
 });
 
 function showAuthScreen() {
