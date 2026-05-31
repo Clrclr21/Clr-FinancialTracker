@@ -1128,11 +1128,12 @@ async function _syncJournal(key) {
 }
 
 // ── LOAD FROM SUPABASE ──────────────────────
-// Simple rule: cloud wins if it has data. No complex merging.
-// If cloud is empty for a table, push localStorage data up.
+// RULE: Cloud is ALWAYS the source of truth.
+// localStorage is only a cache — never used to restore cloud data.
+// New user detection: if settings table is empty → brand new user.
 async function loadFromCloud() {
   const uid = uid_user();
-  if (!uid) throw new Error('No user ID available for cloud load');
+  if (!uid) throw new Error('No user ID for cloud load');
   console.log('[Cloud] Loading for uid:', uid);
 
   const [txns, cats, accs, bud, bills, goals, sets, journals] = await Promise.all([
@@ -1146,111 +1147,89 @@ async function loadFromCloud() {
     sbSelect('journals',     `user_id=eq.${uid}`),
   ]);
 
-  console.log('[Cloud] Results — txns:', txns?.length, 'goals:', goals?.length,
-    'bills:', bills?.length, 'cats:', cats?.length, 'accs:', accs?.length);
+  console.log('[Cloud] Results — txns:', txns?.length,
+    'goals:', goals?.length, 'bills:', bills?.length,
+    'cats:', cats?.length, 'accs:', accs?.length);
 
-  // ── TRANSACTIONS ──
+  // Determine if this is a brand new user
+  // A new user has never synced settings to the cloud
+  const isNewUser = !sets?.data;
+  console.log('[Cloud] isNewUser:', isNewUser);
+
+  // ── TRANSACTIONS ──────────────────────────────
   if (txns?.length > 0) {
     DB.transactions = txns.map(r => ({
       id:           r.id,
       date:         r.date,
-      type:         r.type          || '',
-      category:     r.category      || '',
-      subcategory:  r.subcategory   || '',
-      desc:         r.description   || '',
-      account:      r.account       || '',
-      amount:       r.amount        || 0,
-      status:       r.status        || '',
-      recurringData: r.recurring_data ? (() => { try { return JSON.parse(r.recurring_data); } catch { return null; } })() : null,
+      type:         r.type         || '',
+      category:     r.category     || '',
+      subcategory:  r.subcategory  || '',
+      desc:         r.description  || '',
+      account:      r.account      || '',
+      amount:       r.amount       || 0,
+      status:       r.status       || '',
+      recurringData: r.recurring_data
+        ? (() => { try { return JSON.parse(r.recurring_data); } catch { return null; } })()
+        : null,
     }));
     console.log('[Cloud] Loaded transactions:', DB.transactions.length);
-  } else if (txns !== null && txns !== undefined) {
-    const isNewUser = !sets?.data;
-    if (isNewUser) {
-      const ls = LS.get('transactions') || [];
-      if (ls.length > 0) {
-        console.log('[Cloud] New user: pushing localStorage txns to cloud:', ls.length);
-        DB.transactions = ls;
-        _syncTxns();
-      }
-    } else {
-      // Existing user, cloud transactions empty = intentional
-      DB.transactions = [];
-      LS.set('transactions', []);
-      console.log('[Cloud] Transactions: empty (intentionally cleared)');
-    }
+  } else if (isNewUser) {
+    // Brand new user — nothing to restore
+    DB.transactions = [];
+  } else {
+    // Existing user, cloud empty = user deleted everything
+    DB.transactions = [];
+    console.log('[Cloud] Transactions intentionally empty');
   }
 
-  // ── CATEGORIES ──
+  // ── CATEGORIES ────────────────────────────────
   if (cats?.length > 0) {
     DB.categories = cats.map(x => ({
       id: x.id, name: x.name, type: x.type,
       icon: x.icon, color: x.color, subcats: x.subcats || [],
     }));
-  } else if (cats !== null && cats !== undefined) {
-    const isNewUser = !sets?.data;
-    if (isNewUser) {
-      const ls = LS.get('categories');
-      if (ls?.length > 0) { DB.categories = ls; _syncCats(); }
-      else { DB.categories = JSON.parse(JSON.stringify(DEF_CATS)); _syncCats(); }
-    } else {
-      // Existing user with no categories — restore defaults
-      const ls = LS.get('categories');
-      if (ls?.length > 0) { DB.categories = ls; _syncCats(); }
-      else { DB.categories = JSON.parse(JSON.stringify(DEF_CATS)); _syncCats(); }
-    }
+  } else if (isNewUser) {
+    DB.categories = JSON.parse(JSON.stringify(DEF_CATS));
+    _syncCats();
   }
+  // Existing user with no categories — keep current (don't overwrite)
 
-  // ── ACCOUNTS ──
+  // ── ACCOUNTS ──────────────────────────────────
   if (accs?.length > 0) {
     DB.accounts = accs.map(x => ({
       id: x.id, name: x.name, type: x.type,
       balance: x.balance || 0, color: x.color, active: x.active !== false,
     }));
-  } else if (accs !== null && accs !== undefined) {
-    const isNewUser = !sets?.data;
-    if (isNewUser) {
-      const ls = LS.get('accounts');
-      if (ls?.length > 0) { DB.accounts = ls; _syncAccs(); }
-      else { DB.accounts = JSON.parse(JSON.stringify(DEF_ACCS)); _syncAccs(); }
-    } else {
-      const ls = LS.get('accounts');
-      if (ls?.length > 0) { DB.accounts = ls; _syncAccs(); }
-      else { DB.accounts = JSON.parse(JSON.stringify(DEF_ACCS)); _syncAccs(); }
-    }
+  } else if (isNewUser) {
+    DB.accounts = JSON.parse(JSON.stringify(DEF_ACCS));
+    _syncAccs();
   }
 
-  // ── BUDGETS ──
+  // ── BUDGETS ───────────────────────────────────
   if (bud?.data) {
     DB.budgets = bud.data;
-  } else {
-    const ls = LS.get('budgets');
-    if (ls) { DB.budgets = ls; _syncBudgets(); }
-    else { DB.budgets = JSON.parse(JSON.stringify(DEF_BUDGETS)); _syncBudgets(); }
+  } else if (isNewUser) {
+    DB.budgets = JSON.parse(JSON.stringify(DEF_BUDGETS));
+    _syncBudgets();
   }
 
-  // ── BILLS ──
+  // ── BILLS ─────────────────────────────────────
   if (bills?.length > 0) {
     DB.bills = bills.map(x => ({
       id: x.id, name: x.name, cat: x.cat,
       amount: x.amount || 0, due: x.due,
       account: x.account, status: x.status,
     }));
-    LS.set('bills', DB.bills);
-  } else if (bills !== null && bills !== undefined) {
-    const isNewUser = !sets?.data;
-    if (isNewUser) {
-      const ls = LS.get('bills');
-      if (ls?.length > 0) { DB.bills = ls; _syncBills(); }
-      else { DB.bills = JSON.parse(JSON.stringify(DEF_BILLS)); _syncBills(); }
-    } else {
-      DB.bills = [];
-      LS.set('bills', []);
-      console.log('[Cloud] Bills: empty (intentionally cleared by user)');
-    }
+  } else if (isNewUser) {
+    DB.bills = JSON.parse(JSON.stringify(DEF_BILLS));
+    _syncBills();
+  } else {
+    // Existing user, cloud empty = intentional
+    DB.bills = [];
+    console.log('[Cloud] Bills intentionally empty');
   }
 
-  // ── GOALS ──
+  // ── GOALS ─────────────────────────────────────
   if (goals?.length > 0) {
     DB.goals = goals.map(x => ({
       id: x.id, name: x.name, icon: x.icon,
@@ -1258,43 +1237,39 @@ async function loadFromCloud() {
       deadline: x.deadline, priority: x.priority,
     }));
     console.log('[Cloud] Loaded goals:', DB.goals.map(g => g.name));
-    LS.set('goals', DB.goals);
-  } else if (goals !== null && goals !== undefined) {
-    // Cloud returned empty array = user deleted everything intentionally
-    // Check if this is a brand new user (settings not in cloud yet)
-    const isNewUser = !sets?.data;
-    if (isNewUser) {
-      const ls = LS.get('goals');
-      if (ls?.length > 0) { DB.goals = ls; _syncGoals(); }
-      else { DB.goals = JSON.parse(JSON.stringify(DEF_GOALS)); _syncGoals(); }
-    } else {
-      // Existing user, cloud is empty = intentional
-      DB.goals = [];
-      LS.set('goals', []);
-      console.log('[Cloud] Goals: empty (intentionally cleared by user)');
-    }
+  } else if (isNewUser) {
+    DB.goals = JSON.parse(JSON.stringify(DEF_GOALS));
+    _syncGoals();
+  } else {
+    // Existing user, cloud empty = intentional
+    DB.goals = [];
+    console.log('[Cloud] Goals intentionally empty');
   }
 
-  // ── SETTINGS ──
+  // ── SETTINGS ──────────────────────────────────
   if (sets?.data) {
     DB.settings = sets.data;
-  } else {
-    const ls = LS.get('settings');
-    if (ls) { DB.settings = ls; _syncSettings(); }
-    else { DB.settings = JSON.parse(JSON.stringify(DEF_SETTINGS)); _syncSettings(); }
+  } else if (isNewUser) {
+    DB.settings = JSON.parse(JSON.stringify(DEF_SETTINGS));
+    _syncSettings();
   }
 
-  // ── JOURNALS ──
+  // ── JOURNALS ──────────────────────────────────
   if (journals?.length > 0) {
     DB.journals = {};
     journals.forEach(j => {
-      DB.journals[j.month_key] = { wins: j.wins, lessons: j.lessons, next: j.next };
+      DB.journals[j.month_key] = {
+        wins: j.wins, lessons: j.lessons, next: j.next
+      };
     });
   }
 
-  // Persist everything to localStorage as cache
+  // ALWAYS overwrite localStorage with cloud state
+  // This ensures all devices stay in sync
   Object.keys(DB).forEach(k => LS.set(k, DB[k]));
-  console.log('[Cloud] Done ✅ txns:', DB.transactions.length, 'goals:', DB.goals.length);
+
+  console.log('[Cloud] Done ✅ txns:', DB.transactions.length,
+    'goals:', DB.goals.length, 'bills:', DB.bills.length);
 }
 
 // ── PERIOD ──────────────────────────────────
