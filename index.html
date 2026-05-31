@@ -924,60 +924,117 @@ async function _syncDeleteTxn(id){
   const uid=uid_user(); if(!uid) return;
   try{ await sbDelete('transactions',`id=eq.${id}&user_id=eq.${uid}`); } catch(e){ console.error('Delete txn:', e); }
 }
+// ── SYNC FUNCTIONS — explicit field mapping to match Supabase schema ──
 function _syncCats() {
-  _debounceSync('cats', async()=>{
-    const uid=uid_user(); if(!uid) return;
-    try{ await sbUpsert('categories', DB.categories.map(c=>({...c,user_id:uid}))); hideSync(true); }
-    catch(e){ console.error('Sync cats:', e); hideSync(false); }
+  _debounceSync('cats', async () => {
+    const uid = uid_user(); if (!uid) return;
+    const payload = DB.categories.map(c => ({
+      id:      c.id,
+      user_id: uid,
+      name:    c.name    || '',
+      type:    c.type    || 'Expense',
+      icon:    c.icon    || '📌',
+      color:   c.color   || '#C9848A',
+      subcats: c.subcats || [],
+    }));
+    try { await sbUpsert('categories', payload); hideSync(true); }
+    catch(e) { console.error('[Sync] categories failed:', e.message); hideSync(false); }
   });
 }
+
 function _syncAccs() {
-  _debounceSync('accs', async()=>{
-    const uid=uid_user(); if(!uid) return;
-    showSync('Saving...');
-    try{ await sbUpsert('accounts', DB.accounts.map(a=>({...a,user_id:uid}))); hideSync(true); } catch(e){ console.error('Sync accs:', e); hideSync(false); }
-  }, 400);
+  _debounceSync('accs', async () => {
+    const uid = uid_user(); if (!uid) return;
+    const payload = DB.accounts.map(a => ({
+      id:      a.id,
+      user_id: uid,
+      name:    a.name    || '',
+      type:    a.type    || 'Savings',
+      balance: a.balance || 0,
+      color:   a.color   || '#ccc',
+      active:  a.active  !== false,
+    }));
+    try { await sbUpsert('accounts', payload); hideSync(true); }
+    catch(e) { console.error('[Sync] accounts failed:', e.message); hideSync(false); }
+  });
 }
+
 function _syncBudgets() {
-  _debounceSync('bud', async()=>{
-    const uid=uid_user(); if(!uid) return;
-    try{ await sbUpsert('budgets',[{user_id:uid,data:DB.budgets}]); hideSync(true); }
-    catch(e){ console.error('Sync budgets:', e); hideSync(false); }
+  _debounceSync('bud', async () => {
+    const uid = uid_user(); if (!uid) return;
+    try { await sbUpsert('budgets', [{ user_id: uid, data: DB.budgets }]); hideSync(true); }
+    catch(e) { console.error('[Sync] budgets failed:', e.message); hideSync(false); }
   });
 }
+
 function _syncBills() {
-  _debounceSync('bills', async()=>{
-    const uid=uid_user(); if(!uid) return;
-    showSync('Saving...');
-    try{ await sbUpsert('bills', DB.bills.map(b=>({...b,user_id:uid}))); hideSync(true); } catch(e){ console.error('Sync bills:', e); hideSync(false); }
-  }, 400);
+  _debounceSync('bills', async () => {
+    const uid = uid_user(); if (!uid) return;
+    const payload = DB.bills.map(b => ({
+      id:      b.id,
+      user_id: uid,
+      name:    b.name    || '',
+      cat:     b.cat     || '',
+      amount:  b.amount  || 0,
+      due:     b.due     || 1,
+      account: b.account || '',
+      status:  b.status  || 'Active',
+    }));
+    try { await sbUpsert('bills', payload); hideSync(true); }
+    catch(e) { console.error('[Sync] bills failed:', e.message); hideSync(false); }
+  });
 }
-async function _syncDeleteBill(id){
-  const uid=uid_user(); if(!uid) return;
-  try{ await sbDelete('bills',`id=eq.${id}&user_id=eq.${uid}`); } catch(e){ console.error('Delete bill:', e); }
+
+async function _syncDeleteBill(id) {
+  const uid = uid_user(); if (!uid) return;
+  try { await sbDelete('bills', `id=eq.${id}&user_id=eq.${uid}`); }
+  catch(e) { console.error('[Sync] delete bill failed:', e.message); }
 }
+
 function _syncGoals() {
-  _debounceSync('goals', async()=>{
-    const uid=uid_user(); if(!uid) return;
-    try{ await sbUpsert('goals', DB.goals.map(g=>({...g,user_id:uid}))); hideSync(true); }
-    catch(e){ console.error('Sync goals:', e); hideSync(false); }
+  _debounceSync('goals', async () => {
+    const uid = uid_user(); if (!uid) return;
+    const payload = DB.goals.map(g => ({
+      id:       g.id,
+      user_id:  uid,
+      name:     g.name     || '',
+      icon:     g.icon     || '🎯',
+      target:   g.target   || 0,
+      saved:    g.saved    || 0,
+      deadline: g.deadline || null,
+      priority: g.priority || 'Medium',
+    }));
+    try { await sbUpsert('goals', payload); hideSync(true); }
+    catch(e) { console.error('[Sync] goals failed:', e.message); hideSync(false); }
   });
 }
-async function _syncDeleteGoal(id){
-  const uid=uid_user(); if(!uid) return;
-  try{ await sbDelete('goals',`id=eq.${id}&user_id=eq.${uid}`); } catch(e){ console.error('Delete goal:', e); }
+
+async function _syncDeleteGoal(id) {
+  const uid = uid_user(); if (!uid) return;
+  try { await sbDelete('goals', `id=eq.${id}&user_id=eq.${uid}`); }
+  catch(e) { console.error('[Sync] delete goal failed:', e.message); }
 }
+
 function _syncSettings() {
-  _debounceSync('sets', async()=>{
-    const uid=uid_user(); if(!uid) return;
-    try{ await sbUpsert('settings',[{user_id:uid,data:DB.settings}]); hideSync(true); }
-    catch(e){ console.error('Sync settings:', e); hideSync(false); }
+  _debounceSync('sets', async () => {
+    const uid = uid_user(); if (!uid) return;
+    try { await sbUpsert('settings', [{ user_id: uid, data: DB.settings }]); hideSync(true); }
+    catch(e) { console.error('[Sync] settings failed:', e.message); hideSync(false); }
   });
 }
-async function _syncJournal(key){
-  const uid=uid_user(); if(!uid) return;
-  const j=DB.journals[key]||{};
-  try{ await sbUpsert('journals',[{user_id:uid,month_key:key,wins:j.wins||'',lessons:j.lessons||'',next:j.next||''}]); } catch(e){ console.error('Sync journal:', e); }
+
+async function _syncJournal(key) {
+  const uid = uid_user(); if (!uid) return;
+  const j = DB.journals[key] || {};
+  try {
+    await sbUpsert('journals', [{
+      user_id:   uid,
+      month_key: key,
+      wins:      j.wins    || '',
+      lessons:   j.lessons || '',
+      next:      j.next    || '',
+    }]);
+  } catch(e) { console.error('[Sync] journal failed:', e.message); }
 }
 
 // ── LOAD FROM SUPABASE ──────────────────────
@@ -1864,8 +1921,8 @@ function renderReview() {
 function saveJournal(key) {
   const k=key||document.getElementById('review-month-select')?.value; if(!k) return;
   DB.journals[k]={wins:document.getElementById('journal-wins').value,lessons:document.getElementById('journal-lessons').value,next:document.getElementById('journal-next').value};
-  LS.set('journals',DB.journals);
-  if(_session) _syncJournal(k);
+  LS.set('journals', DB.journals);
+  if (_session && uid_user()) _syncJournal(k);
   toast('Journal saved 📓');
 }
 
