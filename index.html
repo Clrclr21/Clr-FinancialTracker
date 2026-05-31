@@ -819,9 +819,11 @@ const DEF_GOALS = [
 const DEF_SETTINGS = {currency:'IDR',locale:'id-ID',userName:'My Finance OS',monthlyIncome:15000000,savingsTarget:20,emergencyTarget:50000000};
 
 // ── LOCAL STORAGE ────────────────────────────
+// localStorage ONLY used for session token
+// All data stored in Supabase cloud — no local caching of data
 const LS = {
-  get:(k)=>{ try{return JSON.parse(localStorage.getItem('fos2_'+k))}catch{return null} },
-  set:(k,v)=>localStorage.setItem('fos2_'+k,JSON.stringify(v)),
+  get: (k) => null,  // Never read data from localStorage
+  set: (k, v) => {},  // Never write data to localStorage
 };
 
 // ── APP STATE ────────────────────────────────
@@ -842,14 +844,15 @@ let _subcatEditCatId = null;
 
 // ── INIT ────────────────────────────────────
 function initDB() {
-  DB.transactions = LS.get('transactions') || [];
-  DB.categories   = LS.get('categories')   || JSON.parse(JSON.stringify(DEF_CATS));
-  DB.accounts     = LS.get('accounts')     || JSON.parse(JSON.stringify(DEF_ACCS));
-  DB.budgets      = LS.get('budgets')      || JSON.parse(JSON.stringify(DEF_BUDGETS));
-  DB.bills        = LS.get('bills')        || JSON.parse(JSON.stringify(DEF_BILLS));
-  DB.goals        = LS.get('goals')        || JSON.parse(JSON.stringify(DEF_GOALS));
-  DB.settings     = LS.get('settings')     || JSON.parse(JSON.stringify(DEF_SETTINGS));
-  DB.journals     = LS.get('journals')     || {};
+  // Start with empty/default state — loadFromCloud() will fill with real data
+  DB.transactions = [];
+  DB.categories   = JSON.parse(JSON.stringify(DEF_CATS));
+  DB.accounts     = JSON.parse(JSON.stringify(DEF_ACCS));
+  DB.budgets      = JSON.parse(JSON.stringify(DEF_BUDGETS));
+  DB.bills        = [];
+  DB.goals        = [];
+  DB.settings     = JSON.parse(JSON.stringify(DEF_SETTINGS));
+  DB.journals     = {};
 }
 
 // ── SAVE (local + cloud) ────────────────────
@@ -862,10 +865,7 @@ function uid_user() {
 const _pendingDeletes = { transactions:new Set(), categories:new Set(), accounts:new Set(), bills:new Set(), goals:new Set() };
 
 function saveDelete(table, id) {
-  // Mark as deleted locally
   _pendingDeletes[table]?.add(id);
-  // Save to localStorage
-  LS.set(table, DB[table]);
   if (!_session || !uid_user()) {
     console.warn('[saveDelete] No session, local only:', table, id);
     setCloudStatus('offline');
@@ -1264,9 +1264,7 @@ async function loadFromCloud() {
     });
   }
 
-  // ALWAYS overwrite localStorage with cloud state
-  // This ensures all devices stay in sync
-  Object.keys(DB).forEach(k => LS.set(k, DB[k]));
+  // localStorage is disabled for data — cloud is single source of truth
 
   console.log('[Cloud] Done ✅ txns:', DB.transactions.length,
     'goals:', DB.goals.length, 'bills:', DB.bills.length);
@@ -2616,19 +2614,19 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   const stored = localStorage.getItem('fos2_session');
   if (!stored) {
-    // No session — show login form
     document.getElementById('auth-loading').style.display = 'none';
     setCloudStatus('offline');
     return;
   }
 
   let sess;
-  try { sess = JSON.parse(stored); } 
+  try { sess = JSON.parse(stored); }
   catch { localStorage.removeItem('fos2_session'); document.getElementById('auth-loading').style.display='none'; return; }
 
-  // Step 1: Try to refresh the token (ensures we have a valid active session)
-  document.getElementById('auth-loading-msg').textContent = 'Connecting to cloud...';
-  console.log('[Boot] Stored session found, attempting token refresh...');
+  document.getElementById('auth-loading-msg').textContent = 'Connecting...';
+  console.log('[Boot] Stored session found, refreshing token...');
+
+  // Always refresh token first
   try {
     const r = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {
       method: 'POST',
@@ -2636,9 +2634,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       body: JSON.stringify({ refresh_token: sess.refresh_token })
     });
     const fresh = await r.json();
-
     if (r.ok && !fresh.error) {
-      // Token refreshed successfully — use fresh session
       if (!fresh.user && fresh.user_id) fresh.user = { id: fresh.user_id };
       _session = fresh;
       localStorage.setItem('fos2_session', JSON.stringify({
@@ -2648,21 +2644,15 @@ window.addEventListener('DOMContentLoaded', async () => {
         user_id:       fresh.user?.id,
       }));
     } else {
-      // Token refresh failed — try using stored session as-is
-      console.warn('Token refresh failed, using stored session:', fresh.error);
       if (!sess.user && sess.user_id) sess.user = { id: sess.user_id };
       _session = sess;
     }
-  } catch (e) {
-    // Network error — use stored session (offline mode)
-    console.warn('Network error during refresh, using cached session');
+  } catch(e) {
     if (!sess.user && sess.user_id) sess.user = { id: sess.user_id };
     _session = sess;
   }
 
-  // Verify we have a usable user ID
   if (!uid_user()) {
-    console.error('No valid user ID found in session, showing login');
     localStorage.removeItem('fos2_session');
     _session = null;
     document.getElementById('auth-loading').style.display = 'none';
@@ -2670,8 +2660,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
-  // Step 2: Load data from cloud (always attempt, fall back to localStorage)
-  document.getElementById('auth-loading-msg').textContent = 'Loading your data...';
+  document.getElementById('auth-loading-msg').textContent = 'Loading your data...' ;
   try {
     await loadFromCloud();
     // Quick write test to verify auth token actually works for writes
