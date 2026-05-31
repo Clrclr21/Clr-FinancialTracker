@@ -858,18 +858,44 @@ function uid_user() {
   return _session?.user?.id || _session?.user_id || null;
 }
 
+// Track pending deletes per table — prevents upsert from re-inserting deleted items
+const _pendingDeletes = { transactions:new Set(), categories:new Set(), accounts:new Set(), bills:new Set(), goals:new Set() };
+
+function saveDelete(table, id) {
+  // Mark as deleted locally
+  _pendingDeletes[table]?.add(id);
+  // Save to localStorage
+  LS.set(table, DB[table]);
+  if (!_session || !uid_user()) {
+    console.warn('[saveDelete] No session, local only:', table, id);
+    setCloudStatus('offline');
+    return;
+  }
+  // Send DELETE to Supabase
+  showSync('Deleting...');
+  setCloudStatus('syncing');
+  sbDelete(table, `id=eq.${id}&user_id=eq.${uid_user()}`)
+    .then(() => {
+      console.log(`[Sync] DELETE ${table} id=${id} OK`);
+      _pendingDeletes[table]?.delete(id);
+      hideSync(true);
+    })
+    .catch(e => {
+      console.error(`[Sync] DELETE ${table} FAILED:`, e.message);
+      hideSync(false);
+    });
+}
+
 function save(key) {
-  // Always save to localStorage first (instant, offline-safe)
+  // Always save to localStorage first
   LS.set(key, DB[key]);
 
   if (!_session || !uid_user()) {
-    console.warn('save(): no valid session — saved locally only:', key);
+    console.warn('[save] No valid session — local only:', key);
     setCloudStatus('offline');
     return;
   }
 
-  // Then sync to Supabase cloud
-  console.log('[save] Syncing key:', key, '— session:', !!_session, '— uid:', uid_user());
   setCloudStatus('syncing');
   if (key==='transactions') _syncTxns();
   if (key==='categories')   _syncCats();
@@ -878,7 +904,6 @@ function save(key) {
   if (key==='bills')        _syncBills();
   if (key==='goals')        _syncGoals();
   if (key==='settings')     _syncSettings();
-  // journals synced separately via _syncJournal(key)
 }
 
 // ── SYNC TO SUPABASE ────────────────────────
@@ -904,19 +929,23 @@ function hideSync(ok=true) {
 function _syncTxns() {
   _debounceSync('txns', async () => {
     const uid = uid_user(); if (!uid) return;
-    const payload = DB.transactions.map(t => ({
-      id:             t.id,
-      user_id:        uid,
-      date:           t.date,
-      type:           t.type           || '',
-      category:       t.category       || '',
-      subcategory:    t.subcategory     || null,
-      description:    t.desc           || null,
-      account:        t.account        || '',
-      amount:         t.amount         || 0,
-      status:         t.status         || null,
-      recurring_data: t.recurringData ? JSON.stringify(t.recurringData) : null,
-    }));
+    const pending = _pendingDeletes.transactions;
+    const payload = DB.transactions
+      .filter(t => !pending.has(t.id))
+      .map(t => ({
+        id:             t.id,
+        user_id:        uid,
+        date:           t.date,
+        type:           t.type           || '',
+        category:       t.category       || '',
+        subcategory:    t.subcategory     || null,
+        description:    t.desc           || null,
+        account:        t.account        || '',
+        amount:         t.amount         || 0,
+        status:         t.status         || null,
+        recurring_data: t.recurringData ? JSON.stringify(t.recurringData) : null,
+      }));
+    if (payload.length === 0 && DB.transactions.length === 0) { hideSync(true); return; }
     try {
       await sbUpsert('transactions', payload);
       hideSync(true);
@@ -937,15 +966,19 @@ async function _syncDeleteTxn(id) {
 function _syncCats() {
   _debounceSync('cats', async () => {
     const uid = uid_user(); if (!uid) return;
-    const payload = DB.categories.map(c => ({
-      id:      c.id,
-      user_id: uid,
-      name:    c.name    || '',
-      type:    c.type    || 'Expense',
-      icon:    c.icon    || '📌',
-      color:   c.color   || '#C9848A',
-      subcats: c.subcats || [],
-    }));
+    const pending = _pendingDeletes.categories;
+    const payload = DB.categories
+      .filter(c => !pending.has(c.id))
+      .map(c => ({
+        id:      c.id,
+        user_id: uid,
+        name:    c.name    || '',
+        type:    c.type    || 'Expense',
+        icon:    c.icon    || '📌',
+        color:   c.color   || '#C9848A',
+        subcats: c.subcats || [],
+      }));
+    if (payload.length === 0) { hideSync(true); return; }
     try {
       await sbUpsert('categories', payload);
       hideSync(true);
@@ -960,15 +993,19 @@ function _syncCats() {
 function _syncAccs() {
   _debounceSync('accs', async () => {
     const uid = uid_user(); if (!uid) return;
-    const payload = DB.accounts.map(a => ({
-      id:      a.id,
-      user_id: uid,
-      name:    a.name    || '',
-      type:    a.type    || 'Savings',
-      balance: a.balance || 0,
-      color:   a.color   || '#ccc',
-      active:  a.active  !== false,
-    }));
+    const pending = _pendingDeletes.accounts;
+    const payload = DB.accounts
+      .filter(a => !pending.has(a.id))
+      .map(a => ({
+        id:      a.id,
+        user_id: uid,
+        name:    a.name    || '',
+        type:    a.type    || 'Savings',
+        balance: a.balance || 0,
+        color:   a.color   || '#ccc',
+        active:  a.active  !== false,
+      }));
+    if (payload.length === 0) { hideSync(true); return; }
     try {
       await sbUpsert('accounts', payload);
       hideSync(true);
@@ -997,16 +1034,20 @@ function _syncBudgets() {
 function _syncBills() {
   _debounceSync('bills', async () => {
     const uid = uid_user(); if (!uid) return;
-    const payload = DB.bills.map(b => ({
-      id:      b.id,
-      user_id: uid,
-      name:    b.name    || '',
-      cat:     b.cat     || '',
-      amount:  b.amount  || 0,
-      due:     b.due     || 1,
-      account: b.account || '',
-      status:  b.status  || 'Active',
-    }));
+    const pending = _pendingDeletes.bills;
+    const payload = DB.bills
+      .filter(b => !pending.has(b.id))
+      .map(b => ({
+        id:      b.id,
+        user_id: uid,
+        name:    b.name    || '',
+        cat:     b.cat     || '',
+        amount:  b.amount  || 0,
+        due:     b.due     || 1,
+        account: b.account || '',
+        status:  b.status  || 'Active',
+      }));
+    if (payload.length === 0) { hideSync(true); return; }
     try {
       await sbUpsert('bills', payload);
       hideSync(true);
@@ -1027,16 +1068,21 @@ async function _syncDeleteBill(id) {
 function _syncGoals() {
   _debounceSync('goals', async () => {
     const uid = uid_user(); if (!uid) return;
-    const payload = DB.goals.map(g => ({
-      id:       g.id,
-      user_id:  uid,
-      name:     g.name     || '',
-      icon:     g.icon     || '🎯',
-      target:   g.target   || 0,
-      saved:    g.saved    || 0,
-      deadline: g.deadline || null,
-      priority: g.priority || 'Medium',
-    }));
+    // Only upsert goals that are NOT pending delete
+    const pending = _pendingDeletes.goals;
+    const payload = DB.goals
+      .filter(g => !pending.has(g.id))
+      .map(g => ({
+        id:       g.id,
+        user_id:  uid,
+        name:     g.name     || '',
+        icon:     g.icon     || '🎯',
+        target:   g.target   || 0,
+        saved:    g.saved    || 0,
+        deadline: g.deadline || null,
+        priority: g.priority || 'Medium',
+      }));
+    if (payload.length === 0) { hideSync(true); return; }
     try {
       await sbUpsert('goals', payload);
       hideSync(true);
@@ -1565,11 +1611,7 @@ function editTxn(id) {
 function deleteTxn(id) {
   showConfirm('Delete this transaction?',()=>{
     DB.transactions = DB.transactions.filter(t => t.id !== id);
-    LS.set('transactions', DB.transactions);
-    if (_session && uid_user()) {
-      _syncDeleteTxn(id).then(() => hideSync(true));
-      showSync('Deleting...');
-    }
+    saveDelete('transactions', id);
     toast('Deleted'); renderPage();
   });
 }
@@ -1852,11 +1894,7 @@ function saveBill() {
 function deleteBill(id) {
   showConfirm('Delete this bill?',()=>{
     DB.bills = DB.bills.filter(b => b.id !== id);
-    LS.set('bills', DB.bills);
-    if (_session && uid_user()) {
-      _syncDeleteBill(id).then(() => hideSync(true));
-      showSync('Deleting...');
-    }
+    saveDelete('bills', id);
     toast('Deleted'); renderBills();
   });
 }
@@ -1936,16 +1974,7 @@ function saveGoal() {
 function deleteGoal(id) {
   showConfirm('Delete this goal?',()=>{
     DB.goals = DB.goals.filter(g => g.id !== id);
-    // Save to localStorage
-    LS.set('goals', DB.goals);
-    // Delete from cloud (specific row, not upsert-all)
-    if (_session && uid_user()) {
-      _syncDeleteGoal(id).then(() => {
-        console.log('[Sync] goal deleted from cloud:', id);
-        hideSync(true);
-      });
-      showSync('Deleting...');
-    }
+    saveDelete('goals', id);
     toast('Deleted'); renderGoals();
   });
 }
@@ -2034,11 +2063,8 @@ function addAccount() {
 function deleteAccount(id) {
   showConfirm('Delete this account?',()=>{
     DB.accounts = DB.accounts.filter(a => a.id !== id);
-    LS.set('accounts', DB.accounts);
-    if (_session && uid_user()) {
-      sbDelete('accounts', `id=eq.${id}&user_id=eq.${uid_user()}`).catch(e => console.error('[Sync] delete account failed:', e));
-    }
-    save('accounts'); renderAccountsList(); toast('Deleted');
+    saveDelete('accounts', id);
+    renderAccountsList(); toast('Deleted');
   });
 }
 
@@ -2070,11 +2096,8 @@ function addCategory() {
 function deleteCategory(id) {
   showConfirm('Delete this category and subcategories?',()=>{
     DB.categories = DB.categories.filter(c => c.id !== id);
-    LS.set('categories', DB.categories);
-    if (_session && uid_user()) {
-      sbDelete('categories', `id=eq.${id}&user_id=eq.${uid_user()}`).catch(e => console.error('[Sync] delete category failed:', e));
-    }
-    save('categories'); renderCategoriesList(); buildCatFilterSel(); toast('Deleted');
+    saveDelete('categories', id);
+    renderCategoriesList(); buildCatFilterSel(); toast('Deleted');
   });
 }
 
