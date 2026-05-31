@@ -1164,12 +1164,20 @@ async function loadFromCloud() {
       recurringData: r.recurring_data ? (() => { try { return JSON.parse(r.recurring_data); } catch { return null; } })() : null,
     }));
     console.log('[Cloud] Loaded transactions:', DB.transactions.length);
-  } else {
-    const ls = LS.get('transactions') || [];
-    if (ls.length > 0) {
-      console.log('[Cloud] Pushing localStorage transactions to cloud:', ls.length);
-      DB.transactions = ls;
-      _syncTxns();
+  } else if (txns !== null && txns !== undefined) {
+    const isNewUser = !sets?.data;
+    if (isNewUser) {
+      const ls = LS.get('transactions') || [];
+      if (ls.length > 0) {
+        console.log('[Cloud] New user: pushing localStorage txns to cloud:', ls.length);
+        DB.transactions = ls;
+        _syncTxns();
+      }
+    } else {
+      // Existing user, cloud transactions empty = intentional
+      DB.transactions = [];
+      LS.set('transactions', []);
+      console.log('[Cloud] Transactions: empty (intentionally cleared)');
     }
   }
 
@@ -1179,10 +1187,18 @@ async function loadFromCloud() {
       id: x.id, name: x.name, type: x.type,
       icon: x.icon, color: x.color, subcats: x.subcats || [],
     }));
-  } else {
-    const ls = LS.get('categories');
-    if (ls?.length > 0) { DB.categories = ls; _syncCats(); }
-    else { DB.categories = JSON.parse(JSON.stringify(DEF_CATS)); _syncCats(); }
+  } else if (cats !== null && cats !== undefined) {
+    const isNewUser = !sets?.data;
+    if (isNewUser) {
+      const ls = LS.get('categories');
+      if (ls?.length > 0) { DB.categories = ls; _syncCats(); }
+      else { DB.categories = JSON.parse(JSON.stringify(DEF_CATS)); _syncCats(); }
+    } else {
+      // Existing user with no categories — restore defaults
+      const ls = LS.get('categories');
+      if (ls?.length > 0) { DB.categories = ls; _syncCats(); }
+      else { DB.categories = JSON.parse(JSON.stringify(DEF_CATS)); _syncCats(); }
+    }
   }
 
   // ── ACCOUNTS ──
@@ -1191,10 +1207,17 @@ async function loadFromCloud() {
       id: x.id, name: x.name, type: x.type,
       balance: x.balance || 0, color: x.color, active: x.active !== false,
     }));
-  } else {
-    const ls = LS.get('accounts');
-    if (ls?.length > 0) { DB.accounts = ls; _syncAccs(); }
-    else { DB.accounts = JSON.parse(JSON.stringify(DEF_ACCS)); _syncAccs(); }
+  } else if (accs !== null && accs !== undefined) {
+    const isNewUser = !sets?.data;
+    if (isNewUser) {
+      const ls = LS.get('accounts');
+      if (ls?.length > 0) { DB.accounts = ls; _syncAccs(); }
+      else { DB.accounts = JSON.parse(JSON.stringify(DEF_ACCS)); _syncAccs(); }
+    } else {
+      const ls = LS.get('accounts');
+      if (ls?.length > 0) { DB.accounts = ls; _syncAccs(); }
+      else { DB.accounts = JSON.parse(JSON.stringify(DEF_ACCS)); _syncAccs(); }
+    }
   }
 
   // ── BUDGETS ──
@@ -1213,10 +1236,18 @@ async function loadFromCloud() {
       amount: x.amount || 0, due: x.due,
       account: x.account, status: x.status,
     }));
-  } else {
-    const ls = LS.get('bills');
-    if (ls?.length > 0) { DB.bills = ls; _syncBills(); }
-    else { DB.bills = JSON.parse(JSON.stringify(DEF_BILLS)); _syncBills(); }
+    LS.set('bills', DB.bills);
+  } else if (bills !== null && bills !== undefined) {
+    const isNewUser = !sets?.data;
+    if (isNewUser) {
+      const ls = LS.get('bills');
+      if (ls?.length > 0) { DB.bills = ls; _syncBills(); }
+      else { DB.bills = JSON.parse(JSON.stringify(DEF_BILLS)); _syncBills(); }
+    } else {
+      DB.bills = [];
+      LS.set('bills', []);
+      console.log('[Cloud] Bills: empty (intentionally cleared by user)');
+    }
   }
 
   // ── GOALS ──
@@ -1227,10 +1258,21 @@ async function loadFromCloud() {
       deadline: x.deadline, priority: x.priority,
     }));
     console.log('[Cloud] Loaded goals:', DB.goals.map(g => g.name));
-  } else {
-    const ls = LS.get('goals');
-    if (ls?.length > 0) { DB.goals = ls; _syncGoals(); }
-    else { DB.goals = JSON.parse(JSON.stringify(DEF_GOALS)); _syncGoals(); }
+    LS.set('goals', DB.goals);
+  } else if (goals !== null && goals !== undefined) {
+    // Cloud returned empty array = user deleted everything intentionally
+    // Check if this is a brand new user (settings not in cloud yet)
+    const isNewUser = !sets?.data;
+    if (isNewUser) {
+      const ls = LS.get('goals');
+      if (ls?.length > 0) { DB.goals = ls; _syncGoals(); }
+      else { DB.goals = JSON.parse(JSON.stringify(DEF_GOALS)); _syncGoals(); }
+    } else {
+      // Existing user, cloud is empty = intentional
+      DB.goals = [];
+      LS.set('goals', []);
+      console.log('[Cloud] Goals: empty (intentionally cleared by user)');
+    }
   }
 
   // ── SETTINGS ──
