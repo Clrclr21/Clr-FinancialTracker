@@ -878,6 +878,7 @@ function save(key) {
   if (key==='bills')        _syncBills();
   if (key==='goals')        _syncGoals();
   if (key==='settings')     _syncSettings();
+  // journals synced separately via _syncJournal(key)
 }
 
 // ── SYNC TO SUPABASE ────────────────────────
@@ -896,34 +897,6 @@ function hideSync(ok=true) {
   setTimeout(() => { document.getElementById('sync-indicator').style.display = 'none'; }, 2000);
 }
 
-function _syncTxns() {
-  _debounceSync('txns', async()=>{
-    const uid = uid_user();
-    if (!uid) { console.warn('No user ID, skipping txn sync'); return; }
-    setCloudStatus('syncing');
-    showSync('Saving...');
-    try {
-      const payload = DB.transactions.map(t=>({
-        id:t.id, user_id:uid, date:t.date, type:t.type,
-        category:t.category||'', subcategory:t.subcategory||null,
-        description:t.desc||null, account:t.account||'',
-        amount:t.amount, status:t.status||null,
-        recurring_data:t.recurringData?JSON.stringify(t.recurringData):null
-      }));
-      await sbUpsert('transactions', payload);
-      hideSync(true); setCloudStatus('synced');
-    } catch(e){
-      console.error('Sync txns failed:', e);
-      hideSync(false);
-      toast('⚠️ Cloud sync failed. Data saved locally.', 'error');
-      setCloudStatus('error');
-    }
-  }, 400);
-}
-async function _syncDeleteTxn(id){
-  const uid=uid_user(); if(!uid) return;
-  try{ await sbDelete('transactions',`id=eq.${id}&user_id=eq.${uid}`); } catch(e){ console.error('Delete txn:', e); }
-}
 // ── SYNC FUNCTIONS ─────────────────────────────────────────
 // Each function sends ONLY the exact fields that exist in Supabase schema.
 // Cloud is always the source of truth — localStorage is just a cache.
@@ -1591,9 +1564,12 @@ function editTxn(id) {
 
 function deleteTxn(id) {
   showConfirm('Delete this transaction?',()=>{
-    DB.transactions=DB.transactions.filter(t=>t.id!==id);
-    save('transactions');
-    if(_session) _syncDeleteTxn(id);
+    DB.transactions = DB.transactions.filter(t => t.id !== id);
+    LS.set('transactions', DB.transactions);
+    if (_session && uid_user()) {
+      _syncDeleteTxn(id).then(() => hideSync(true));
+      showSync('Deleting...');
+    }
     toast('Deleted'); renderPage();
   });
 }
@@ -1875,9 +1851,12 @@ function saveBill() {
 }
 function deleteBill(id) {
   showConfirm('Delete this bill?',()=>{
-    DB.bills=DB.bills.filter(b=>b.id!==id);
-    save('bills');
-    if(_session) _syncDeleteBill(id);
+    DB.bills = DB.bills.filter(b => b.id !== id);
+    LS.set('bills', DB.bills);
+    if (_session && uid_user()) {
+      _syncDeleteBill(id).then(() => hideSync(true));
+      showSync('Deleting...');
+    }
     toast('Deleted'); renderBills();
   });
 }
@@ -1956,9 +1935,17 @@ function saveGoal() {
 }
 function deleteGoal(id) {
   showConfirm('Delete this goal?',()=>{
-    DB.goals=DB.goals.filter(g=>g.id!==id);
-    save('goals');
-    if(_session) _syncDeleteGoal(id);
+    DB.goals = DB.goals.filter(g => g.id !== id);
+    // Save to localStorage
+    LS.set('goals', DB.goals);
+    // Delete from cloud (specific row, not upsert-all)
+    if (_session && uid_user()) {
+      _syncDeleteGoal(id).then(() => {
+        console.log('[Sync] goal deleted from cloud:', id);
+        hideSync(true);
+      });
+      showSync('Deleting...');
+    }
     toast('Deleted'); renderGoals();
   });
 }
@@ -2045,7 +2032,14 @@ function addAccount() {
   renderAccountsList(); toast('Account added 🏦');
 }
 function deleteAccount(id) {
-  showConfirm('Delete this account?',()=>{ DB.accounts=DB.accounts.filter(a=>a.id!==id); save('accounts'); renderAccountsList(); toast('Deleted'); });
+  showConfirm('Delete this account?',()=>{
+    DB.accounts = DB.accounts.filter(a => a.id !== id);
+    LS.set('accounts', DB.accounts);
+    if (_session && uid_user()) {
+      sbDelete('accounts', `id=eq.${id}&user_id=eq.${uid_user()}`).catch(e => console.error('[Sync] delete account failed:', e));
+    }
+    save('accounts'); renderAccountsList(); toast('Deleted');
+  });
 }
 
 function renderCategoriesList() {
@@ -2074,7 +2068,14 @@ function addCategory() {
   renderCategoriesList(); buildCatFilterSel(); toast('Category added');
 }
 function deleteCategory(id) {
-  showConfirm('Delete this category and subcategories?',()=>{ DB.categories=DB.categories.filter(c=>c.id!==id); save('categories'); renderCategoriesList(); buildCatFilterSel(); toast('Deleted'); });
+  showConfirm('Delete this category and subcategories?',()=>{
+    DB.categories = DB.categories.filter(c => c.id !== id);
+    LS.set('categories', DB.categories);
+    if (_session && uid_user()) {
+      sbDelete('categories', `id=eq.${id}&user_id=eq.${uid_user()}`).catch(e => console.error('[Sync] delete category failed:', e));
+    }
+    save('categories'); renderCategoriesList(); buildCatFilterSel(); toast('Deleted');
+  });
 }
 
 // Subcat management
