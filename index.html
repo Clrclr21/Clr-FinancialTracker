@@ -984,6 +984,8 @@ async function _syncJournal(key){
 async function loadFromCloud() {
   const uid = uid_user();
   if (!uid) throw new Error('No user ID available for cloud load');
+  console.log('[Cloud] Loading data for uid:', uid);
+
   const [txns,cats,accs,bud,bills,goals,sets,journals] = await Promise.all([
     sbSelect('transactions',`user_id=eq.${uid}&order=date.desc`),
     sbSelect('categories',`user_id=eq.${uid}`),
@@ -994,31 +996,121 @@ async function loadFromCloud() {
     sbSelect('settings',`user_id=eq.${uid}`).then(r=>r[0]),
     sbSelect('journals',`user_id=eq.${uid}`),
   ]);
-  if (txns?.length)  DB.transactions = txns.map(r=>({id:r.id,date:r.date,type:r.type,category:r.category,subcategory:r.subcategory,desc:r.description,account:r.account,amount:r.amount,status:r.status,recurringData:r.recurring_data?JSON.parse(r.recurring_data):null}));
-  if (cats?.length)  DB.categories   = cats;
-  if (accs?.length)  DB.accounts     = accs;
-  if (bud?.data)     DB.budgets      = bud.data;
-  if (bills?.length) DB.bills        = bills;
-  if (goals?.length) DB.goals        = goals;
-  if (sets?.data)  { DB.settings     = sets.data; }
-  if (journals?.length){ DB.journals={}; journals.forEach(j=>{DB.journals[j.month_key]={wins:j.wins,lessons:j.lessons,next:j.next};}); }
-  // Seed defaults for new users
-  if (!cats?.length){ DB.categories=JSON.parse(JSON.stringify(DEF_CATS)); _syncCats(); }
-  if (!accs?.length){ DB.accounts=JSON.parse(JSON.stringify(DEF_ACCS)); _syncAccs(); }
-  if (!bud)          { DB.budgets=JSON.parse(JSON.stringify(DEF_BUDGETS)); _syncBudgets(); }
-  if (!bills?.length){ DB.bills=JSON.parse(JSON.stringify(DEF_BILLS)); _syncBills(); }
-  if (!goals?.length){ DB.goals=JSON.parse(JSON.stringify(DEF_GOALS)); _syncGoals(); }
-  if (!sets)         { DB.settings=JSON.parse(JSON.stringify(DEF_SETTINGS)); _syncSettings(); }
-  // Always persist all cloud data to localStorage (keeps cache in sync)
+
+  console.log('[Cloud] Raw results — txns:', txns?.length, 'cats:', cats?.length,
+    'accs:', accs?.length, 'bills:', bills?.length, 'goals:', goals?.length,
+    'settings:', !!sets, 'budgets:', !!bud);
+
+  // Only update DB if cloud has data — never overwrite with empty
+  if (cats?.length) {
+    DB.categories = cats.map(cat => ({
+      id:      cat.id,
+      name:    cat.name,
+      type:    cat.type,
+      icon:    cat.icon,
+      color:   cat.color,
+      subcats: cat.subcats || [],
+    }));
+  }
+  if (accs?.length) {
+    DB.accounts = accs.map(a => ({
+      id:      a.id,
+      name:    a.name,
+      type:    a.type,
+      balance: a.balance || 0,
+      color:   a.color,
+      active:  a.active !== false,
+    }));
+  }
+  if (bud?.data)      DB.budgets    = bud.data;
+  if (bills?.length) {
+    DB.bills = bills.map(b => ({
+      id:      b.id,
+      name:    b.name,
+      cat:     b.cat,
+      amount:  b.amount || 0,
+      due:     b.due,
+      account: b.account,
+      status:  b.status,
+    }));
+  }
+  if (sets?.data)   { DB.settings   = sets.data; }
+  if (journals?.length) {
+    DB.journals = {};
+    journals.forEach(j => { DB.journals[j.month_key] = {wins:j.wins,lessons:j.lessons,next:j.next}; });
+  }
+
+  // Goals — strip user_id field when loading into app
+  if (goals?.length) {
+    DB.goals = goals.map(g => ({
+      id:       g.id,
+      name:     g.name,
+      icon:     g.icon,
+      target:   g.target,
+      saved:    g.saved,
+      deadline: g.deadline,
+      priority: g.priority,
+    }));
+    console.log('[Cloud] Goals loaded:', DB.goals.length, DB.goals.map(g=>g.name));
+  }
+  // For new users: seed defaults only if BOTH cloud AND localStorage are empty
+  const lsCats  = LS.get('categories');
+  const lsAccs  = LS.get('accounts');
+  const lsBills = LS.get('bills');
+  const lsGoals = LS.get('goals');
+  const lsSets  = LS.get('settings');
+  const lsTxns  = LS.get('transactions');
+
+  // Transactions: prefer cloud if has data, else push localStorage to cloud
+  if (txns?.length) {
+    DB.transactions = txns.map(r => ({
+      id:           r.id,
+      date:         r.date,
+      type:         r.type,
+      category:     r.category     || '',
+      subcategory:  r.subcategory  || '',
+      desc:         r.description  || '',
+      account:      r.account      || '',
+      amount:       r.amount       || 0,
+      status:       r.status       || '',
+      recurringData: r.recurring_data ? JSON.parse(r.recurring_data) : null,
+    }));
+    console.log('[Cloud] Transactions loaded:', DB.transactions.length);
+  } else if (lsTxns?.length) {
+    // Cloud empty but localStorage has data — push localStorage to cloud
+    console.log('[loadFromCloud] Cloud txns empty, pushing localStorage to cloud...');
+    DB.transactions = lsTxns;
+    _syncTxns();
+  }
+
+  if (!cats?.length && !lsCats?.length)  { DB.categories=JSON.parse(JSON.stringify(DEF_CATS));     _syncCats(); }
+  else if (!cats?.length && lsCats?.length) { DB.categories=lsCats; _syncCats(); }
+
+  if (!accs?.length && !lsAccs?.length)  { DB.accounts=JSON.parse(JSON.stringify(DEF_ACCS));       _syncAccs(); }
+  else if (!accs?.length && lsAccs?.length) { DB.accounts=lsAccs; _syncAccs(); }
+
+  if (!bud && !lsSets)                   { DB.budgets=JSON.parse(JSON.stringify(DEF_BUDGETS));     _syncBudgets(); }
+  else if (!bud && LS.get('budgets'))    { DB.budgets=LS.get('budgets'); _syncBudgets(); }
+
+  if (!bills?.length && !lsBills?.length){ DB.bills=JSON.parse(JSON.stringify(DEF_BILLS));         _syncBills(); }
+  else if (!bills?.length && lsBills?.length) { DB.bills=lsBills; _syncBills(); }
+
+  if (!goals?.length && !lsGoals?.length){ DB.goals=JSON.parse(JSON.stringify(DEF_GOALS));         _syncGoals(); }
+  else if (!goals?.length && lsGoals?.length) { DB.goals=lsGoals; _syncGoals(); }
+
+  if (!sets && !lsSets)                  { DB.settings=JSON.parse(JSON.stringify(DEF_SETTINGS));   _syncSettings(); }
+  else if (!sets && lsSets)              { DB.settings=lsSets; _syncSettings(); }
+
+  // Always persist latest state to localStorage
   Object.keys(DB).forEach(k => LS.set(k, DB[k]));
-  console.log('✅ Cloud data loaded and persisted to localStorage');
+  console.log('[loadFromCloud] Done — txns:', DB.transactions.length, 'cats:', DB.categories.length);
 }
 
 // ── PERIOD ──────────────────────────────────
 function setPeriod(type) {
   const now=new Date(), y=now.getFullYear(), m=now.getMonth();
-  period.type=type;
-  if(type==='this-month') { period.from=new Date(y,m,1); period.to=new Date(y,m+1,0); }
+  period.type = type || 'this-month';
+  if(type==='this-month' || !type) { period.from=new Date(y,m,1); period.to=new Date(y,m+1,0); }
   if(type==='last-month') { period.from=new Date(y,m-1,1); period.to=new Date(y,m,0); }
   if(type==='3months')    { period.from=new Date(y,m-2,1); period.to=new Date(y,m+1,0); }
   if(type==='6months')    { period.from=new Date(y,m-5,1); period.to=new Date(y,m+1,0); }
@@ -1039,8 +1131,19 @@ function setPeriod(type) {
   renderPage();
 }
 function fmtMonthInput(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; }
-function inPeriod(dateStr){ const d=new Date(dateStr); return d>=period.from && d<=period.to; }
-function filteredTxns(){ return DB.transactions.filter(t=>inPeriod(t.date)); }
+function inPeriod(dateStr) {
+  if (!dateStr || !period.from || !period.to) return true;
+  // Parse date as local date (avoid UTC timezone shift)
+  const [y,m,d] = dateStr.split('-').map(Number);
+  const date = new Date(y, m-1, d);
+  const from = new Date(period.from.getFullYear(), period.from.getMonth(), period.from.getDate());
+  const to   = new Date(period.to.getFullYear(),   period.to.getMonth(),   period.to.getDate());
+  return date >= from && date <= to;
+}
+function filteredTxns() {
+  if (!period.from || !period.to) setPeriod('this-month');
+  return DB.transactions.filter(t => inPeriod(t.date));
+}
 
 // ── NAVIGATE ─────────────────────────────────
 function navigate(pg) {
@@ -2021,6 +2124,7 @@ function saveTxn(addAnother=false) {
     DB.transactions.push({id:uid(),date,type,category:cat,subcategory:subcat,desc,account:acc,amount:amt,status,recurringData});
   }
   save('transactions');
+
   toast(editId?'Updated ✨':'Saved ✨');
 
   if(addAnother && !editId) {
@@ -2292,7 +2396,9 @@ function showApp(user,nameHint='') {
   document.getElementById('dd-name').textContent=name;
   document.getElementById('dd-email').textContent=user?.email||'';
   document.getElementById('user-menu-btn').style.display='flex';
-  loadSettingsUI(); setPeriod('this-month'); navigate('dashboard');
+  loadSettingsUI();
+  setPeriod('this-month');  // Initialize period BEFORE navigate
+  setTimeout(() => navigate('dashboard'), 50);  // Small delay ensures DB is ready
 }
 async function doLogout() {
   toggleUserMenu(false);
