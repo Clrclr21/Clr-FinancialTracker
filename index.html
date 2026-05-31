@@ -924,7 +924,43 @@ async function _syncDeleteTxn(id){
   const uid=uid_user(); if(!uid) return;
   try{ await sbDelete('transactions',`id=eq.${id}&user_id=eq.${uid}`); } catch(e){ console.error('Delete txn:', e); }
 }
-// ── SYNC FUNCTIONS — explicit field mapping to match Supabase schema ──
+// ── SYNC FUNCTIONS ─────────────────────────────────────────
+// Each function sends ONLY the exact fields that exist in Supabase schema.
+// Cloud is always the source of truth — localStorage is just a cache.
+
+function _syncTxns() {
+  _debounceSync('txns', async () => {
+    const uid = uid_user(); if (!uid) return;
+    const payload = DB.transactions.map(t => ({
+      id:             t.id,
+      user_id:        uid,
+      date:           t.date,
+      type:           t.type           || '',
+      category:       t.category       || '',
+      subcategory:    t.subcategory     || null,
+      description:    t.desc           || null,
+      account:        t.account        || '',
+      amount:         t.amount         || 0,
+      status:         t.status         || null,
+      recurring_data: t.recurringData ? JSON.stringify(t.recurringData) : null,
+    }));
+    try {
+      await sbUpsert('transactions', payload);
+      hideSync(true);
+      console.log('[Sync] transactions OK:', payload.length, 'rows');
+    } catch(e) {
+      console.error('[Sync] transactions FAILED:', e.message);
+      hideSync(false);
+    }
+  });
+}
+
+async function _syncDeleteTxn(id) {
+  const uid = uid_user(); if (!uid) return;
+  try { await sbDelete('transactions', `id=eq.${id}&user_id=eq.${uid}`); }
+  catch(e) { console.error('[Sync] delete txn failed:', e.message); }
+}
+
 function _syncCats() {
   _debounceSync('cats', async () => {
     const uid = uid_user(); if (!uid) return;
@@ -937,8 +973,14 @@ function _syncCats() {
       color:   c.color   || '#C9848A',
       subcats: c.subcats || [],
     }));
-    try { await sbUpsert('categories', payload); hideSync(true); }
-    catch(e) { console.error('[Sync] categories failed:', e.message); hideSync(false); }
+    try {
+      await sbUpsert('categories', payload);
+      hideSync(true);
+      console.log('[Sync] categories OK:', payload.length);
+    } catch(e) {
+      console.error('[Sync] categories FAILED:', e.message);
+      hideSync(false);
+    }
   });
 }
 
@@ -954,16 +996,28 @@ function _syncAccs() {
       color:   a.color   || '#ccc',
       active:  a.active  !== false,
     }));
-    try { await sbUpsert('accounts', payload); hideSync(true); }
-    catch(e) { console.error('[Sync] accounts failed:', e.message); hideSync(false); }
+    try {
+      await sbUpsert('accounts', payload);
+      hideSync(true);
+      console.log('[Sync] accounts OK:', payload.length);
+    } catch(e) {
+      console.error('[Sync] accounts FAILED:', e.message);
+      hideSync(false);
+    }
   });
 }
 
 function _syncBudgets() {
   _debounceSync('bud', async () => {
     const uid = uid_user(); if (!uid) return;
-    try { await sbUpsert('budgets', [{ user_id: uid, data: DB.budgets }]); hideSync(true); }
-    catch(e) { console.error('[Sync] budgets failed:', e.message); hideSync(false); }
+    try {
+      await sbUpsert('budgets', [{ user_id: uid, data: DB.budgets }]);
+      hideSync(true);
+      console.log('[Sync] budgets OK');
+    } catch(e) {
+      console.error('[Sync] budgets FAILED:', e.message);
+      hideSync(false);
+    }
   });
 }
 
@@ -980,8 +1034,14 @@ function _syncBills() {
       account: b.account || '',
       status:  b.status  || 'Active',
     }));
-    try { await sbUpsert('bills', payload); hideSync(true); }
-    catch(e) { console.error('[Sync] bills failed:', e.message); hideSync(false); }
+    try {
+      await sbUpsert('bills', payload);
+      hideSync(true);
+      console.log('[Sync] bills OK:', payload.length);
+    } catch(e) {
+      console.error('[Sync] bills FAILED:', e.message);
+      hideSync(false);
+    }
   });
 }
 
@@ -1004,8 +1064,14 @@ function _syncGoals() {
       deadline: g.deadline || null,
       priority: g.priority || 'Medium',
     }));
-    try { await sbUpsert('goals', payload); hideSync(true); }
-    catch(e) { console.error('[Sync] goals failed:', e.message); hideSync(false); }
+    try {
+      await sbUpsert('goals', payload);
+      hideSync(true);
+      console.log('[Sync] goals OK:', payload.length, payload.map(g=>g.name));
+    } catch(e) {
+      console.error('[Sync] goals FAILED:', e.message);
+      hideSync(false);
+    }
   });
 }
 
@@ -1018,8 +1084,13 @@ async function _syncDeleteGoal(id) {
 function _syncSettings() {
   _debounceSync('sets', async () => {
     const uid = uid_user(); if (!uid) return;
-    try { await sbUpsert('settings', [{ user_id: uid, data: DB.settings }]); hideSync(true); }
-    catch(e) { console.error('[Sync] settings failed:', e.message); hideSync(false); }
+    try {
+      await sbUpsert('settings', [{ user_id: uid, data: DB.settings }]);
+      hideSync(true);
+    } catch(e) {
+      console.error('[Sync] settings FAILED:', e.message);
+      hideSync(false);
+    }
   });
 }
 
@@ -1038,129 +1109,131 @@ async function _syncJournal(key) {
 }
 
 // ── LOAD FROM SUPABASE ──────────────────────
+// Simple rule: cloud wins if it has data. No complex merging.
+// If cloud is empty for a table, push localStorage data up.
 async function loadFromCloud() {
   const uid = uid_user();
   if (!uid) throw new Error('No user ID available for cloud load');
-  console.log('[Cloud] Loading data for uid:', uid);
+  console.log('[Cloud] Loading for uid:', uid);
 
-  const [txns,cats,accs,bud,bills,goals,sets,journals] = await Promise.all([
-    sbSelect('transactions',`user_id=eq.${uid}&order=date.desc`),
-    sbSelect('categories',`user_id=eq.${uid}`),
-    sbSelect('accounts',`user_id=eq.${uid}`),
-    sbSelect('budgets',`user_id=eq.${uid}`).then(r=>r[0]),
-    sbSelect('bills',`user_id=eq.${uid}`),
-    sbSelect('goals',`user_id=eq.${uid}`),
-    sbSelect('settings',`user_id=eq.${uid}`).then(r=>r[0]),
-    sbSelect('journals',`user_id=eq.${uid}`),
+  const [txns, cats, accs, bud, bills, goals, sets, journals] = await Promise.all([
+    sbSelect('transactions', `user_id=eq.${uid}&order=date.desc`),
+    sbSelect('categories',   `user_id=eq.${uid}`),
+    sbSelect('accounts',     `user_id=eq.${uid}`),
+    sbSelect('budgets',      `user_id=eq.${uid}`).then(r => r[0] || null),
+    sbSelect('bills',        `user_id=eq.${uid}`),
+    sbSelect('goals',        `user_id=eq.${uid}`),
+    sbSelect('settings',     `user_id=eq.${uid}`).then(r => r[0] || null),
+    sbSelect('journals',     `user_id=eq.${uid}`),
   ]);
 
-  console.log('[Cloud] Raw results — txns:', txns?.length, 'cats:', cats?.length,
-    'accs:', accs?.length, 'bills:', bills?.length, 'goals:', goals?.length,
-    'settings:', !!sets, 'budgets:', !!bud);
+  console.log('[Cloud] Results — txns:', txns?.length, 'goals:', goals?.length,
+    'bills:', bills?.length, 'cats:', cats?.length, 'accs:', accs?.length);
 
-  // Only update DB if cloud has data — never overwrite with empty
-  if (cats?.length) {
-    DB.categories = cats.map(cat => ({
-      id:      cat.id,
-      name:    cat.name,
-      type:    cat.type,
-      icon:    cat.icon,
-      color:   cat.color,
-      subcats: cat.subcats || [],
-    }));
-  }
-  if (accs?.length) {
-    DB.accounts = accs.map(a => ({
-      id:      a.id,
-      name:    a.name,
-      type:    a.type,
-      balance: a.balance || 0,
-      color:   a.color,
-      active:  a.active !== false,
-    }));
-  }
-  if (bud?.data)      DB.budgets    = bud.data;
-  if (bills?.length) {
-    DB.bills = bills.map(b => ({
-      id:      b.id,
-      name:    b.name,
-      cat:     b.cat,
-      amount:  b.amount || 0,
-      due:     b.due,
-      account: b.account,
-      status:  b.status,
-    }));
-  }
-  if (sets?.data)   { DB.settings   = sets.data; }
-  if (journals?.length) {
-    DB.journals = {};
-    journals.forEach(j => { DB.journals[j.month_key] = {wins:j.wins,lessons:j.lessons,next:j.next}; });
-  }
-
-  // Goals — strip user_id field when loading into app
-  if (goals?.length) {
-    DB.goals = goals.map(g => ({
-      id:       g.id,
-      name:     g.name,
-      icon:     g.icon,
-      target:   g.target,
-      saved:    g.saved,
-      deadline: g.deadline,
-      priority: g.priority,
-    }));
-    console.log('[Cloud] Goals loaded:', DB.goals.length, DB.goals.map(g=>g.name));
-  }
-  // For new users: seed defaults only if BOTH cloud AND localStorage are empty
-  const lsCats  = LS.get('categories');
-  const lsAccs  = LS.get('accounts');
-  const lsBills = LS.get('bills');
-  const lsGoals = LS.get('goals');
-  const lsSets  = LS.get('settings');
-  const lsTxns  = LS.get('transactions');
-
-  // Transactions: prefer cloud if has data, else push localStorage to cloud
-  if (txns?.length) {
+  // ── TRANSACTIONS ──
+  if (txns?.length > 0) {
     DB.transactions = txns.map(r => ({
       id:           r.id,
       date:         r.date,
-      type:         r.type,
-      category:     r.category     || '',
-      subcategory:  r.subcategory  || '',
-      desc:         r.description  || '',
-      account:      r.account      || '',
-      amount:       r.amount       || 0,
-      status:       r.status       || '',
-      recurringData: r.recurring_data ? JSON.parse(r.recurring_data) : null,
+      type:         r.type          || '',
+      category:     r.category      || '',
+      subcategory:  r.subcategory   || '',
+      desc:         r.description   || '',
+      account:      r.account       || '',
+      amount:       r.amount        || 0,
+      status:       r.status        || '',
+      recurringData: r.recurring_data ? (() => { try { return JSON.parse(r.recurring_data); } catch { return null; } })() : null,
     }));
-    console.log('[Cloud] Transactions loaded:', DB.transactions.length);
-  } else if (lsTxns?.length) {
-    // Cloud empty but localStorage has data — push localStorage to cloud
-    console.log('[loadFromCloud] Cloud txns empty, pushing localStorage to cloud...');
-    DB.transactions = lsTxns;
-    _syncTxns();
+    console.log('[Cloud] Loaded transactions:', DB.transactions.length);
+  } else {
+    const ls = LS.get('transactions') || [];
+    if (ls.length > 0) {
+      console.log('[Cloud] Pushing localStorage transactions to cloud:', ls.length);
+      DB.transactions = ls;
+      _syncTxns();
+    }
   }
 
-  if (!cats?.length && !lsCats?.length)  { DB.categories=JSON.parse(JSON.stringify(DEF_CATS));     _syncCats(); }
-  else if (!cats?.length && lsCats?.length) { DB.categories=lsCats; _syncCats(); }
+  // ── CATEGORIES ──
+  if (cats?.length > 0) {
+    DB.categories = cats.map(x => ({
+      id: x.id, name: x.name, type: x.type,
+      icon: x.icon, color: x.color, subcats: x.subcats || [],
+    }));
+  } else {
+    const ls = LS.get('categories');
+    if (ls?.length > 0) { DB.categories = ls; _syncCats(); }
+    else { DB.categories = JSON.parse(JSON.stringify(DEF_CATS)); _syncCats(); }
+  }
 
-  if (!accs?.length && !lsAccs?.length)  { DB.accounts=JSON.parse(JSON.stringify(DEF_ACCS));       _syncAccs(); }
-  else if (!accs?.length && lsAccs?.length) { DB.accounts=lsAccs; _syncAccs(); }
+  // ── ACCOUNTS ──
+  if (accs?.length > 0) {
+    DB.accounts = accs.map(x => ({
+      id: x.id, name: x.name, type: x.type,
+      balance: x.balance || 0, color: x.color, active: x.active !== false,
+    }));
+  } else {
+    const ls = LS.get('accounts');
+    if (ls?.length > 0) { DB.accounts = ls; _syncAccs(); }
+    else { DB.accounts = JSON.parse(JSON.stringify(DEF_ACCS)); _syncAccs(); }
+  }
 
-  if (!bud && !lsSets)                   { DB.budgets=JSON.parse(JSON.stringify(DEF_BUDGETS));     _syncBudgets(); }
-  else if (!bud && LS.get('budgets'))    { DB.budgets=LS.get('budgets'); _syncBudgets(); }
+  // ── BUDGETS ──
+  if (bud?.data) {
+    DB.budgets = bud.data;
+  } else {
+    const ls = LS.get('budgets');
+    if (ls) { DB.budgets = ls; _syncBudgets(); }
+    else { DB.budgets = JSON.parse(JSON.stringify(DEF_BUDGETS)); _syncBudgets(); }
+  }
 
-  if (!bills?.length && !lsBills?.length){ DB.bills=JSON.parse(JSON.stringify(DEF_BILLS));         _syncBills(); }
-  else if (!bills?.length && lsBills?.length) { DB.bills=lsBills; _syncBills(); }
+  // ── BILLS ──
+  if (bills?.length > 0) {
+    DB.bills = bills.map(x => ({
+      id: x.id, name: x.name, cat: x.cat,
+      amount: x.amount || 0, due: x.due,
+      account: x.account, status: x.status,
+    }));
+  } else {
+    const ls = LS.get('bills');
+    if (ls?.length > 0) { DB.bills = ls; _syncBills(); }
+    else { DB.bills = JSON.parse(JSON.stringify(DEF_BILLS)); _syncBills(); }
+  }
 
-  if (!goals?.length && !lsGoals?.length){ DB.goals=JSON.parse(JSON.stringify(DEF_GOALS));         _syncGoals(); }
-  else if (!goals?.length && lsGoals?.length) { DB.goals=lsGoals; _syncGoals(); }
+  // ── GOALS ──
+  if (goals?.length > 0) {
+    DB.goals = goals.map(x => ({
+      id: x.id, name: x.name, icon: x.icon,
+      target: x.target || 0, saved: x.saved || 0,
+      deadline: x.deadline, priority: x.priority,
+    }));
+    console.log('[Cloud] Loaded goals:', DB.goals.map(g => g.name));
+  } else {
+    const ls = LS.get('goals');
+    if (ls?.length > 0) { DB.goals = ls; _syncGoals(); }
+    else { DB.goals = JSON.parse(JSON.stringify(DEF_GOALS)); _syncGoals(); }
+  }
 
-  if (!sets && !lsSets)                  { DB.settings=JSON.parse(JSON.stringify(DEF_SETTINGS));   _syncSettings(); }
-  else if (!sets && lsSets)              { DB.settings=lsSets; _syncSettings(); }
+  // ── SETTINGS ──
+  if (sets?.data) {
+    DB.settings = sets.data;
+  } else {
+    const ls = LS.get('settings');
+    if (ls) { DB.settings = ls; _syncSettings(); }
+    else { DB.settings = JSON.parse(JSON.stringify(DEF_SETTINGS)); _syncSettings(); }
+  }
 
-  // Always persist latest state to localStorage
+  // ── JOURNALS ──
+  if (journals?.length > 0) {
+    DB.journals = {};
+    journals.forEach(j => {
+      DB.journals[j.month_key] = { wins: j.wins, lessons: j.lessons, next: j.next };
+    });
+  }
+
+  // Persist everything to localStorage as cache
   Object.keys(DB).forEach(k => LS.set(k, DB[k]));
-  console.log('[loadFromCloud] Done — txns:', DB.transactions.length, 'cats:', DB.categories.length);
+  console.log('[Cloud] Done ✅ txns:', DB.transactions.length, 'goals:', DB.goals.length);
 }
 
 // ── PERIOD ──────────────────────────────────
