@@ -766,9 +766,18 @@ async function sbSelect(table, qs='') {
 }
 async function sbUpsert(table, data) {
   if (!data || (Array.isArray(data) && !data.length)) return;
+  const headers = sbH({'Prefer':'resolution=merge-duplicates,return=minimal'});
+  console.log(`[Supabase] UPSERT ${table} — uid: ${uid_user()} — rows: ${Array.isArray(data)?data.length:1}`);
+  console.log(`[Supabase] Auth header: Bearer ${headers.Authorization?.slice(7,27)}...`);
   const r = await fetch(`${SB_URL}/rest/v1/${table}`, {
-    method:'POST', headers:sbH({'Prefer':'resolution=merge-duplicates,return=minimal'}), body:JSON.stringify(data) });
-  if (!r.ok) throw new Error(`UPSERT ${table}: ${r.status} ${await r.text()}`);
+    method: 'POST', headers, body: JSON.stringify(data)
+  });
+  if (!r.ok) {
+    const errText = await r.text();
+    console.error(`[Supabase] UPSERT FAILED ${table}: HTTP ${r.status}`, errText);
+    throw new Error(`UPSERT ${table}: ${r.status} ${errText}`);
+  }
+  console.log(`[Supabase] UPSERT OK ${table}: HTTP ${r.status}`);
 }
 async function sbDelete(table, filter) {
   const r = await fetch(`${SB_URL}/rest/v1/${table}?${filter}`, { method:'DELETE', headers:sbH() });
@@ -860,6 +869,7 @@ function save(key) {
   }
 
   // Then sync to Supabase cloud
+  console.log('[save] Syncing key:', key, '— session:', !!_session, '— uid:', uid_user());
   setCloudStatus('syncing');
   if (key==='transactions') _syncTxns();
   if (key==='categories')   _syncCats();
@@ -872,13 +882,19 @@ function save(key) {
 
 // ── SYNC TO SUPABASE ────────────────────────
 let _syncTimer = {};
-function _debounceSync(key, fn, ms=800) {
+function _debounceSync(key, fn, ms=300) {
   clearTimeout(_syncTimer[key]);
   _syncTimer[key] = setTimeout(fn, ms);
 }
 
 function showSync(msg='Saving...'){ const el=document.getElementById('sync-indicator'); el.style.display='flex'; document.getElementById('sync-text').textContent=msg; document.getElementById('sync-dot').style.background='var(--warn)'; }
-function hideSync(ok=true){ document.getElementById('sync-dot').style.background=ok?'var(--success)':'var(--warn-red)'; document.getElementById('sync-text').textContent=ok?'✓ Saved':'Sync error'; setTimeout(()=>{ document.getElementById('sync-indicator').style.display='none'; },1600); }
+function hideSync(ok=true) {
+  setCloudStatus(ok ? 'synced' : 'error');
+  document.getElementById('sync-indicator').style.display = 'flex';
+  document.getElementById('sync-dot').style.background = ok ? 'var(--success)' : 'var(--warn-red)';
+  document.getElementById('sync-text').textContent = ok ? '✓ Saved' : 'Sync error';
+  setTimeout(() => { document.getElementById('sync-indicator').style.display = 'none'; }, 2000);
+}
 
 function _syncTxns() {
   _debounceSync('txns', async()=>{
@@ -911,8 +927,9 @@ async function _syncDeleteTxn(id){
 function _syncCats() {
   _debounceSync('cats', async()=>{
     const uid=uid_user(); if(!uid) return;
-    try{ await sbUpsert('categories', DB.categories.map(c=>({...c,user_id:uid}))); } catch(e){ console.error('Sync cats:', e); }
-  }, 400);
+    try{ await sbUpsert('categories', DB.categories.map(c=>({...c,user_id:uid}))); hideSync(true); }
+    catch(e){ console.error('Sync cats:', e); hideSync(false); }
+  });
 }
 function _syncAccs() {
   _debounceSync('accs', async()=>{
@@ -924,8 +941,9 @@ function _syncAccs() {
 function _syncBudgets() {
   _debounceSync('bud', async()=>{
     const uid=uid_user(); if(!uid) return;
-    try{ await sbUpsert('budgets',[{user_id:uid,data:DB.budgets}]); } catch(e){ console.error('Sync budgets:', e); }
-  }, 400);
+    try{ await sbUpsert('budgets',[{user_id:uid,data:DB.budgets}]); hideSync(true); }
+    catch(e){ console.error('Sync budgets:', e); hideSync(false); }
+  });
 }
 function _syncBills() {
   _debounceSync('bills', async()=>{
@@ -941,8 +959,9 @@ async function _syncDeleteBill(id){
 function _syncGoals() {
   _debounceSync('goals', async()=>{
     const uid=uid_user(); if(!uid) return;
-    try{ await sbUpsert('goals', DB.goals.map(g=>({...g,user_id:uid}))); } catch(e){ console.error('Sync goals:', e); }
-  }, 400);
+    try{ await sbUpsert('goals', DB.goals.map(g=>({...g,user_id:uid}))); hideSync(true); }
+    catch(e){ console.error('Sync goals:', e); hideSync(false); }
+  });
 }
 async function _syncDeleteGoal(id){
   const uid=uid_user(); if(!uid) return;
@@ -951,8 +970,9 @@ async function _syncDeleteGoal(id){
 function _syncSettings() {
   _debounceSync('sets', async()=>{
     const uid=uid_user(); if(!uid) return;
-    try{ await sbUpsert('settings',[{user_id:uid,data:DB.settings}]); } catch(e){ console.error('Sync settings:', e); }
-  }, 600);
+    try{ await sbUpsert('settings',[{user_id:uid,data:DB.settings}]); hideSync(true); }
+    catch(e){ console.error('Sync settings:', e); hideSync(false); }
+  });
 }
 async function _syncJournal(key){
   const uid=uid_user(); if(!uid) return;
@@ -2331,6 +2351,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   // Step 1: Try to refresh the token (ensures we have a valid active session)
   document.getElementById('auth-loading-msg').textContent = 'Connecting to cloud...';
+  console.log('[Boot] Stored session found, attempting token refresh...');
   try {
     const r = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {
       method: 'POST',
@@ -2376,11 +2397,34 @@ window.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('auth-loading-msg').textContent = 'Loading your data...';
   try {
     await loadFromCloud();
-    setCloudStatus('synced');
+    // Quick write test to verify auth token actually works for writes
+    try {
+      const uid = uid_user();
+      const testR = await fetch(`${SB_URL}/rest/v1/settings`, {
+        method: 'POST',
+        headers: sbH({'Prefer':'resolution=merge-duplicates,return=minimal'}),
+        body: JSON.stringify([{user_id: uid, data: DB.settings}])
+      });
+      if (testR.ok) {
+        console.log('[Boot] Write test OK — auth token valid for writes');
+        setCloudStatus('synced');
+      } else {
+        const errText = await testR.text();
+        console.error('[Boot] Write test FAILED:', testR.status, errText);
+        setCloudStatus('error');
+        // Try to re-login silently if 401
+        if (testR.status === 401) {
+          console.warn('[Boot] 401 Unauthorized — session may be expired');
+          localStorage.removeItem('fos2_session');
+        }
+      }
+    } catch(e) {
+      console.warn('[Boot] Write test network error:', e.message);
+      setCloudStatus('synced'); // assume ok if network issue
+    }
   } catch (e) {
     console.error('Cloud load failed, using local cache:', e);
     setCloudStatus('error');
-    // Data from initDB() (localStorage) is still available
   }
 
   // Step 3: Show app
